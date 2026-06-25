@@ -1,0 +1,119 @@
+# 2344 華邦電 每日盤前走勢分析
+
+每天上午 06:00 自動抓取**六面**標準化資料（技術 / 基本 / 籌碼 / 消息 / 美光 / 費半），由 Claude 依回測最佳權重做當日盤前走勢研判，產出報告並 email。
+
+## 分工
+- **標準化抓取（決定性腳本）**：`src/build_dataset.py` → `data/2344_YYYYMMDD.json`
+- **時間軸累積**：`src/timeline_db.py`（SQLite `data/market.db`）+ `src/ingest.py`，`build_dataset.py` 每日自動攝取
+- **回測 / 權重優化**：`src/scoring.py` + `src/backtest.py` → `data/weights.json`（六面權重 + 中性門檻）
+- **參數校準**：`src/calibrate.py` → `data/score_params.json`；**消息型態驗證**：`src/validate_news.py` → `data/news_patterns.json`
+- **分析（Claude）**：技能 `/cmoney-2344-daily` 讀 JSON + weights → `reports/2344_YYYYMMDD.md`
+- **交付**：`src/send_email.py` 寄報告給 `MAIL_TO`
+- **排程**：`src/run_daily.ps1`（依序跑抓取→分析→寄信）由 Windows 工作排程器於 06:00 觸發
+
+## 資料來源（六面）
+| 面向 | 來源 | 單位/備註 |
+|---|---|---|
+| 技術面 | Fugle Marketdata API（historical/candles → 本地算 MA/KD/RSI/MACD/乖離/量能） | 需 API 金鑰 |
+| 基本面 | Fugle stats（PE/PB/殖利率/52週）＋ TWSE 月營收 t187ap05_L | 營收單位：仟元 |
+| 籌碼面 | TWSE RWD：fund/T86（三大法人）、marginTrading/MI_MARGN（融資融券） | 單位：張；免金鑰 |
+| 消息面 | CMoney 論壇/新聞內部 JSON API（Playwright 攔截） | 發布時間取自 createTime（精確毫秒），嚴格確認 |
+| 美光 (MU) | Yahoo Finance chart API | 隔夜收盤漲跌%；免金鑰 |
+| 費半 (SOX) | Yahoo Finance chart API（^SOX） | 隔夜收盤漲跌%；免金鑰 |
+
+> 記憶體族群與美光/費半高度正相關，隔夜美股常主導 2344 當日方向，為重要外生特徵。
+
+## 設定 `.env`（複製 `.env.example`）
+```
+FUGLE_MARKETDATA_API_KEY=<你的富果金鑰>
+MAIL_TO=<你的 Email>
+```
+寄信採 Gmail API + OAuth：需 `credentials.json`（Google Cloud Console 下載）；首次授權後自動產生 `token.json`。
+
+---
+
+# 操作方式
+
+每個流程都提供「**一鍵 .bat**」與「**等價手動指令**」兩種方式，**擇一即可**。先設好 `.env`（與 Gmail 憑證）再開始。下面兩節為同一套流程的兩種入口，步驟編號互相對應。
+
+## 路徑 A — 一鍵操作（.bat，雙擊即可）
+
+依生命週期順序：
+
+| 步驟 | 檔案 | 用途 | 等價手動（見路徑 B） |
+|---|---|---|---|
+| 1 | `setup.bat` | **建置環境**：安裝套件 + Playwright + 初始化時間軸 DB + 回補消息/K線/美股 | B-1 |
+| 2（選用） | `backfill_history.bat` | 回補歷史籌碼 → 回測 → 消息型態驗證 → 樣本外複核（產生 `data\weights.json`、`data\news_patterns.json`） | B-2 |
+| 2'（選用） | `calibrate.bat` | 校準評分參數 + 重算平衡權重 → 樣本外複核（產生 `data\score_params.json`、`data\weights.json`） | B-2' |
+| 3 | `run_once.bat` | **立即執行一次**每日流程（抓資料 → Claude 分析 → 寄信） | B-3 |
+| 4 | `schedule_create.bat` | **建立**每日 06:00 排程 | B-4 |
+| — | `schedule_delete.bat` | **刪除**排程 | B-4 |
+
+> 排程相關 .bat 若提示權限不足，請以系統管理員身分執行。`backfill_history.bat` / `calibrate.bat` 未帶參數時，預設視窗為 `--start 2025-07-01`（與 TUNING.md 基準一致），可自行覆寫，例如 `calibrate.bat --start 2025-07-01 --end 2026-06-23 --rounds 2`。
+
+## 路徑 B — 手動指令（PowerShell，等價於各 .bat）
+
+### B-1 建置環境（＝ `setup.bat`）
+```powershell
+pip install -r requirements.txt
+python -m playwright install chromium
+python src\timeline_db.py --init
+python src\ingest.py --backfill-json
+python src\ingest.py --backfill-candles
+python src\ingest.py --backfill-us
+```
+
+### B-2 回補歷史 + 重算權重（＝ `backfill_history.bat`，以「當前已校準參數」重算）
+```powershell
+python src\ingest.py --backfill-chips                            # 回補歷史籌碼（逐日抓 TWSE 較慢；省略日期=自動取全區間）
+python src\backtest.py --start 2025-07-01 [--end 2026-06-23]     # 回測 -> data\weights.json + reports\backtest_*.md
+python src\validate_news.py --start 2025-07-01                   # 驗證消息型態極性 -> data\news_patterns.json
+python src\oos_check.py --start 2025-07-01                       # 樣本外複核（OOS 應 >= baseline ~47%）
+```
+
+### B-2' 逐步校準評分參數（＝ `calibrate.bat`，會「改寫」參數再重算）
+```powershell
+python src\calibrate.py --start 2025-07-01 --rounds 2   # 座標上升校準 score_params.json，再全網格 -> weights.json（平衡+校準）
+python src\oos_check.py  --start 2025-07-01 --rounds 2  # 樣本外複核
+```
+> B-2 與 B-2' 的差別：B-2 **沿用**現有 `score_params.json` 只重算權重；B-2' **重新校準**評分參數本身。完整調適流程與判讀準則見 **[TUNING.md](TUNING.md)**。
+
+### B-3 執行一次每日流程（＝ `run_once.bat`）
+逐步驗證每個環節：
+```powershell
+python src\build_dataset.py                          # 產生當日標準化 JSON（並自動攝取進 market.db）
+# 在 Claude Code 內：/cmoney-2344-daily             # 讀 JSON + weights -> reports\2344_YYYYMMDD.md
+python src\send_email.py reports\2344_YYYYMMDD.md    # 寄信測試
+```
+或直接跑排程用的包裝腳本（與 `run_once.bat` 完全相同）：
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File src\run_daily.ps1
+```
+
+### B-4 每日 06:00 排程（＝ `schedule_create.bat` / `schedule_delete.bat`）
+```powershell
+schtasks /Create /TN "CMoney_2344_Daily" /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\johnyou\Desktop\make-money\src\run_daily.ps1" /SC DAILY /ST 06:00 /F
+schtasks /Run    /TN "CMoney_2344_Daily"      # 立即觸發一次測試（或執行 run_once.bat）
+schtasks /Delete /TN "CMoney_2344_Daily" /F   # 刪除（或執行 schedule_delete.bat）
+```
+排程需求：`claude` CLI 已安裝並登入（供 `run_daily.ps1` 無頭呼叫）。執行日誌見 `logs/`。
+
+---
+
+# 策略說明：回測與權重優化（動態調整六面權重）
+
+把六面研判編碼為確定性評分（`src/scoring.py`），以「每個交易日為資訊截止斷點、**不偷看當日之後**」做 walk-forward 回測，網格搜尋命中率最高的六面權重，寫入 `data/weights.json` 供每日技能讀取。時間軸 DB 讓歷史斷點可低成本查詢、免重複爬取。對應的執行指令見路徑 A 步驟 2/2' 或路徑 B 的 B-2/B-2'。
+
+- **預測目標**：`sign(當日收盤 − 前日收盤)`，實際漲跌**中性帶 ±1%**（三類：偏多/中性/偏空）。
+- **無 look-ahead**：技術只用 D-1 收盤、籌碼 `data_date < D`、消息 `< D 09:00`、美股 `date < D`，皆於回測中以 assert 強制。
+- **平衡權重**：`weights.json` 採「命中率距最佳 ≤2pp 內最均衡」的方案（避免退化壓在 2-3 面），`raw_best` 另存純最高命中率方案。
+- **判斷提示指標**：報告含逐指標（六面 + 技術子訊號）方向命中率，看哪些指標有預測力、哪些是雜訊。
+- **逐步校準**：`calibrate.py` 對 `score_params.json` 內門檻/尺度做座標上升調適（規則為手寫啟發式，非訓練模型，需校準）。
+- **消息型態獨立驗證**：`validate_news.py` 對每個消息型態（券商調升目標價、記憶體漲價、外資買賣超…）**獨立以歷史驗證**次日效應，只有樣本足夠且顯著者才賦予極性。**反直覺型態**（如券商調升後常「利多出盡」賣出）一旦驗證為負 edge，會自動以偏空計分；未驗證者中性，避免誤判。型態極性存 `data/news_patterns.json`，由 `scoring.score_news` 優先採用。
+- 消息面無法回補，只能隨每日快照累積；其權重與型態極性待累積足夠後重跑才漸具意義（報告會標註各面涵蓋率與信心）。
+- 命中率非報酬率，僅供權重相對比較；建議以樣本外（train/test 切分）複核：`python src\oos_check.py`。
+
+> **完整調適流程見 [TUNING.md](TUNING.md)** —— 內含系統組成、逐步指令、判讀準則、調適決策邏輯與鐵則，
+> 讓任何新對話都能執行「重跑調適 / 重新優化權重」。
+
+> 06:00 台股未開盤，採前一交易日收盤定數＋隔夜美股/消息，產出盤前走勢研判。本專案為資訊彙整與分析，非投資建議，據此操作風險自負。

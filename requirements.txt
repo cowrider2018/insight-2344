@@ -1,0 +1,7 @@
+requests>=2.31
+python-dotenv>=1.0
+playwright>=1.40
+markdown>=3.5
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+google-auth>=2.30
