@@ -9,28 +9,33 @@ echo  2344 Winbond pre-market analysis - environment setup
 echo ====================================================
 echo.
 
-echo [1/5] Install Python packages (requirements.txt)
+echo [1/6] Install Python packages (requirements.txt)
 python -m pip install -r requirements.txt
 if errorlevel 1 goto :err
 
 echo.
-echo [2/5] Install Playwright Chromium (for news scraping)
+echo [2/6] Install Playwright Chromium (for news scraping)
 python -m playwright install chromium
 if errorlevel 1 goto :err
 
 echo.
-echo [3/5] Initialize timeline database data\market.db
+echo [3/6] Initialize timeline database data\market.db
 python src\timeline_db.py --init
 if errorlevel 1 goto :err
 
 echo.
-echo [4/5] Backfill news/chips/revenue/candles from existing snapshots
+echo [4/6] Backfill news/chips/revenue/candles from existing snapshots
 python src\ingest.py --backfill-json
 
 echo.
-echo [5/5] Backfill daily candles (Fugle) and overnight US (Micron/SOX, Yahoo)
+echo [5/6] Backfill daily candles (Fugle) and overnight US (Micron/SOX, Yahoo)
 python src\ingest.py --backfill-candles
 python src\ingest.py --backfill-us
+
+echo.
+echo [6/6] Authorize Gmail (opens browser once) -^> token.json
+python -c "import sys; sys.path.insert(0, 'src'); import send_email; send_email._gmail_service(); print('Gmail authorized -> token.json')"
+if errorlevel 1 goto :err
 
 echo.
 echo ====================================================
