@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import date, datetime
+from math import comb
 
 import config
 import indicators
@@ -83,7 +84,8 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
     """
     candles = tdb.candles_upto(conn, symbol)  # 由舊到新
     feats: list[dict] = []
-    coverage = {"chips": 0, "news": 0, "fundamental": 0, "micron": 0, "sox": 0}
+    coverage = {"chips": 0, "news": 0, "fundamental": 0, "micron": 0, "sox": 0,
+                "intraday": 0, "branch": 0}
 
     for i in range(1, len(candles)):
         D = candles[i]
@@ -117,8 +119,17 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
         assert mu is None or mu["date"] < d_date, "look-ahead: 美光隔夜超過 D"
         assert sox is None or sox["date"] < d_date, "look-ahead: 費半隔夜超過 D"
 
+        intraday = tdb.intraday_asof(conn, symbol, d_date)  # D-1（或更早）的 1 分 K
+        assert intraday is None or intraday[0]["date"] < d_date, "look-ahead: 日內 1 分 K 超過 D"
+
+        branch = tdb.branches_asof(conn, symbol, d_date)    # D-1（或更早）的主力分點
+        assert branch is None or branch[0]["date"] < d_date, "look-ahead: 主力分點超過 D"
+        branch_wf = tdb.branch_wf_asof(conn, symbol, d_date)  # D-1（或更早）walk-forward 分數
+        assert branch_wf is None or branch_wf["date"] < d_date, "look-ahead: 分點 wf 超過 D"
+
         for key, present in (("chips", chips), ("news", news), ("fundamental", rev),
-                             ("micron", mu), ("sox", sox)):
+                             ("micron", mu), ("sox", sox), ("intraday", intraday),
+                             ("branch", branch)):
             if present:
                 coverage[key] += 1
 
@@ -127,7 +138,8 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
             "date": d_date,
             "technical": technical, "prev_close": prev_close,
             "chips": chips, "ref_vol_lots": ref_vol_lots,
-            "news": news, "rev": rev, "mu": mu, "sox": sox,
+            "news": news, "rev": rev, "mu": mu, "sox": sox, "intraday": intraday,
+            "branch": branch, "branch_wf": branch_wf,
             "change_pct": round(pct, 2),
             "actual": label_from_pct(pct, tol),
         })
@@ -140,15 +152,23 @@ def score_samples(feats: list[dict], params: dict | None = None) -> list[dict]:
     samples = []
     for f in feats:
         sub = scoring.technical_signals(f["technical"], f["prev_close"], p)
+        id_sub = scoring.intraday_signals(f["intraday"], p) if f.get("intraday") else {}
+        wf = f.get("branch_wf")
+        wf_score = wf.get("score") if wf else None
+        br_sub = scoring.branch_signals(f["branch"], p, wf_score) if f.get("branch") else {}
+        # 「無資料」一律以 None 表示（combine 會跳過並重新正規化權重 -> 公平）
         scores = {
             "technical": scoring.score_technical(f["technical"], f["prev_close"], p),
-            "chips": scoring.score_chips(f["chips"], f["ref_vol_lots"], p) if f["chips"] else 0.0,
-            "news": scoring.score_news(f["news"], p),
-            "fundamental": scoring.score_fundamental(f["rev"], p),
-            "micron": scoring.score_us(f["mu"], p),
-            "sox": scoring.score_us(f["sox"], p),
+            "chips": scoring.score_chips(f["chips"], f["ref_vol_lots"], p) if f["chips"] else None,
+            "news": scoring.score_news(f["news"], p) if f["news"] else None,
+            "fundamental": scoring.score_fundamental(f["rev"], p) if f["rev"] else None,
+            "micron": scoring.score_us(f["mu"], p) if f["mu"] else None,
+            "sox": scoring.score_us(f["sox"], p) if f["sox"] else None,
+            "intraday": scoring.score_intraday(f["intraday"], p) if f.get("intraday") else None,
+            "branch": scoring.score_branch(f["branch"], p, wf_score) if f.get("branch") else None,
         }
         samples.append({"date": f["date"], "scores": scores, "subsignals": sub,
+                        "id_subsignals": id_sub, "branch_subsignals": br_sub,
                         "change_pct": f["change_pct"], "actual": f["actual"]})
     return samples
 
@@ -199,17 +219,71 @@ def optimize(samples: list[dict], step: int = WEIGHT_STEP, tau_grid: list | None
     return results
 
 
-def pick_balanced(results: list[dict], tol: float = 0.02) -> dict:
-    """在命中率距最佳 tol（預設 2pp）以內的方案中，選最均衡（變異數最小）者。
+def pick_balanced(results: list[dict], tol: float = 0.0) -> dict:
+    """命中率第一優先：在命中率距最佳 tol 以內（預設 0=僅同為最高命中率）的方案中，
+    選最均衡（變異數最小）者作為次選排序。
 
-    避免退化解（權重全壓在 2-3 面），換取更穩健、各面皆有貢獻的權重；
-    只在「幾乎不損失命中率」的前提下追求平衡。
+    tol=0 時等於「採最高命中率，僅在多個並列最佳時取較均衡者」；
+    若刻意要以少量命中率換穩健，可傳入 tol>0（如 0.02）。
     """
     if not results:
         return {}
     best_wr = results[0]["win_rate"]
     near = [r for r in results if r["win_rate"] >= best_wr - tol]
     return min(near, key=lambda r: (_balance(r["weights"]), -r["win_rate"]))
+
+
+def _binom_two_sided_p(k: int, n: int, p: float) -> float:
+    """Binom(n,p) 下「機率不高於 k 結果」之總機率（雙尾近似）；與 validate_news 同法。"""
+    if n == 0:
+        return 1.0
+    probs = [comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(n + 1)]
+    pk = probs[k]
+    return min(1.0, sum(pr for pr in probs if pr <= pk + 1e-12))
+
+
+def dim_significant(samples: list[dict], dim: str, min_n: int = 8, alpha: float = 0.15) -> dict:
+    """第七面顯著性護欄：覆蓋的「非中性日」中方向命中是否顯著優於擲硬幣(0.5)。
+
+    樣本不足（active < min_n）或不顯著（二項 p≥alpha 或命中率≤50%）-> significant=False，
+    呼叫端據此把該面權重強制歸 0，避免小樣本（如 30 日）運氣虛灌命中率。
+    """
+    active = hit = 0
+    for s in samples:
+        v = s["scores"].get(dim)
+        if v is None or v == 0 or s["actual"] == 0:
+            continue
+        active += 1
+        if (1 if v > 0 else -1) == s["actual"]:
+            hit += 1
+    hit_rate = hit / active if active else 0.0
+    pval = _binom_two_sided_p(hit, active, 0.5) if active else 1.0
+    significant = active >= min_n and pval < alpha and hit_rate > 0.5
+    return {"significant": significant, "active": active, "hit": hit,
+            "hit_rate": round(hit_rate, 4), "p_value": round(pval, 4)}
+
+
+def eligible_dims(samples: list[dict], min_n: int = 8, alpha: float = 0.15) -> dict:
+    """逐面顯著性。技術面為基準面恆視為合格；其餘面須通過二項檢定才可獲得權重。"""
+    return {d: dim_significant(samples, d, min_n, alpha) for d in scoring.DIMENSIONS}
+
+
+def apply_guard(samples: list[dict], results: list[dict],
+                min_n: int = 8, alpha: float = 0.15) -> tuple[list[dict], dict]:
+    """顯著性護欄（公平核心）：覆蓋率正規化後，低覆蓋/不顯著的面不可獲得「免費權重」。
+
+    對每個非技術面做二項檢定（vs 0.5），不顯著者（含覆蓋率過低 -> active<min_n）一律
+    強制權重=0：過濾權重網格只保留這些面權重皆為 0 的方案，再交由 pick_balanced 選平衡解。
+    這同時擋住第七面 30 日小樣本與消息/基本面低覆蓋的運氣灌水，確保 240 筆公平比較。
+    """
+    elig = eligible_dims(samples, min_n, alpha)
+    blocked = [d for d in scoring.DIMENSIONS
+               if d != "technical" and not elig[d]["significant"]]
+    if blocked:
+        kept = [r for r in results
+                if all(r["weights"].get(d, 0.0) == 0.0 for d in blocked)]
+        results = kept or results
+    return results, {"eligibility": elig, "blocked": blocked}
 
 
 def signal_diagnostics(samples: list[dict]) -> list[dict]:
@@ -219,13 +293,22 @@ def signal_diagnostics(samples: list[dict]) -> list[dict]:
     用來看哪些指標真的有預測力、哪些是雜訊，作為逐步校準依據。
     """
     rows = []
-    # 六面 + 技術子訊號
+    # 七面 + 技術子訊號 + 日內子訊號
     keys = [("dim", d) for d in scoring.DIMENSIONS] + \
-           [("sub", s) for s in ("ma", "kd", "rsi", "macd", "bias", "volprice")]
+           [("sub", s) for s in ("ma", "kd", "rsi", "macd", "bias", "volprice")] + \
+           [("idsub", s) for s in ("vwap", "pos", "tail", "trend", "volconc")] + \
+           [("brsub", s) for s in ("net", "conc", "smart", "daytrade", "longterm")]
     for kind, name in keys:
         active = hit = 0
         for s in samples:
-            val = s["scores"].get(name) if kind == "dim" else s["subsignals"].get(name)
+            if kind == "dim":
+                val = s["scores"].get(name)
+            elif kind == "sub":
+                val = s["subsignals"].get(name)
+            elif kind == "idsub":
+                val = s.get("id_subsignals", {}).get(name)
+            else:
+                val = s.get("branch_subsignals", {}).get(name)
             if val is None:
                 continue
             sgn = 1 if val > 0 else (-1 if val < 0 else 0)
@@ -254,10 +337,18 @@ def baseline_single_dim(samples: list[dict], tau: float = 0.15) -> dict:
 
 
 _DIM_ZH = {"technical": "技術", "chips": "籌碼", "news": "消息", "fundamental": "基本",
-           "micron": "美光", "sox": "費半"}
+           "micron": "美光", "sox": "費半", "intraday": "日內", "branch": "分點"}
 
 
 _SUB_ZH = {"ma": "均線", "kd": "KD", "rsi": "RSI", "macd": "MACD", "bias": "乖離", "volprice": "量價"}
+
+
+_IDSUB_ZH = {"vwap": "VWAP偏離", "pos": "收盤位置", "tail": "尾盤動能",
+             "trend": "日內趨勢", "volconc": "量能分布"}
+
+
+_BRSUB_ZH = {"net": "主力淨額", "conc": "集中度", "smart": "聰明錢(行為)",
+             "daytrade": "隔日沖(名單)", "longterm": "長線(名單)"}
 
 
 def _wstr(weights: dict) -> str:
@@ -296,12 +387,12 @@ def write_report(samples, coverage, results, start, end, tol, path, balanced=Non
     if balanced:
         lines += [
             "",
-            "## 平衡權重方案（命中率距最佳 ≤2pp 內最均衡，**實際採用**）",
+            "## 採用權重方案（命中率第一優先，同分時取最均衡，**實際採用**）",
             f"- 權重：{_wstr(balanced['weights'])}",
             f"- 中性帶門檻 tau：{balanced['tau']}",
             f"- **命中率：{balanced['win_rate']:.2%}**　方向命中率：{balanced['directional_hit_rate']:.2%}"
             f"　方向涵蓋率：{balanced['directional_coverage']:.2%}",
-            "- 取較均衡權重以提升穩健度（避免退化壓在 2-3 面），僅在幾乎不損命中率時換取平衡。",
+            "- 命中率第一優先（balance_tol 預設 0）：採最高命中率方案，僅在多個並列最佳時取較均衡者。",
         ]
 
     if diagnostics:
@@ -313,8 +404,10 @@ def write_report(samples, coverage, results, start, end, tol, path, balanced=Non
             "|---|---|---|---|",
         ]
         for r in diagnostics:
-            label = _DIM_ZH.get(r["name"]) or _SUB_ZH.get(r["name"], r["name"])
-            kind = "面" if r["kind"] == "dim" else "技術子訊號"
+            label = (_DIM_ZH.get(r["name"]) or _SUB_ZH.get(r["name"])
+                     or _IDSUB_ZH.get(r["name"]) or _BRSUB_ZH.get(r["name"], r["name"]))
+            kind = {"dim": "面", "sub": "技術子訊號", "idsub": "日內子訊號",
+                    "brsub": "分點子訊號"}[r["kind"]]
             lines.append(f"| {kind} | {label} | {r['hit_rate']:.2%} | {r['active']} |")
 
     lines += ["", "## 單面基準命中率（weight=1 單押該面，tau=0.15）", "| 面向 | 命中率 |", "|---|---|"]
@@ -335,6 +428,11 @@ def write_report(samples, coverage, results, start, end, tol, path, balanced=Non
         "## 注意與限制",
         f"- 消息面僅 {coverage['news']}/{n} 日有資料；若偏低，消息權重的優化結果信心不足，"
         "須待每日快照累積後重跑。",
+        f"- 第七面（日內 1 分 K）僅 {coverage.get('intraday', 0)}/{n} 日有資料（Fugle 1 分 K 僅保留近期"
+        "交易日，更早歷史無法回補，須每日累積成長）；未達顯著門檻時權重被護欄強制歸 0，"
+        "coverage 與逐面顯著性（dim_significance）見 data/weights.json。",
+        f"- 第八面（主力分點）僅 {coverage.get('branch', 0)}/{n} 日有資料（富邦 DJ 僅提供最新一日，"
+        "歷史無法回補，須每日累積）；隔日沖/長線分類為人工種子名單，待累積後以行為統計精進。",
         "- 基本面（月營收）變動緩慢且舊月難回補，貢獻有限。",
         "- 隔夜美光/費半為強外生訊號，但與大盤高度相關，須留意過擬合；建議以樣本外驗證複核。",
         "- 本回測無交易成本/滑價假設，命中率非報酬率，僅供權重相對比較。",
@@ -351,7 +449,7 @@ def main(argv: list[str]) -> None:
     start = opt("--start", "2025-01-01")
     end = opt("--end", config.today_str()[:4] + "-12-31")
     tol = float(opt("--tol", str(NEUTRAL_TOL)))
-    balance_tol = float(opt("--balance-tol", "0.02"))  # 平衡選擇允許犧牲的命中率（預設 2pp）
+    balance_tol = float(opt("--balance-tol", "0.0"))  # 命中率第一優先：預設 0=不為平衡犧牲命中率
 
     tdb.init_db()
     with tdb.connect() as conn:
@@ -362,6 +460,7 @@ def main(argv: list[str]) -> None:
         return
 
     results = optimize(samples)
+    results, guard = apply_guard(samples, results)   # 顯著性護欄（含第七面）
     best = results[0]
     balanced = pick_balanced(results, balance_tol)   # 實際採用：更平衡的權重
     diagnostics = signal_diagnostics(samples)
@@ -380,6 +479,13 @@ def main(argv: list[str]) -> None:
         "balance_tol": balance_tol,
         "raw_best": {"weights": best["weights"], "tau": best["tau"], "win_rate": best["win_rate"]},
         "coverage": coverage,
+        "blocked_dims": guard["blocked"],
+        "intraday_significant": guard["eligibility"]["intraday"]["significant"],
+        "intraday_active": guard["eligibility"]["intraday"]["active"],
+        "intraday_hit_rate": guard["eligibility"]["intraday"]["hit_rate"],
+        "dim_significance": {d: {"significant": g["significant"], "active": g["active"],
+                                 "hit_rate": g["hit_rate"]}
+                             for d, g in guard["eligibility"].items()},
         "score_params_file": "data/score_params.json",
     }
     weights_path = config.DATA_DIR / "weights.json"

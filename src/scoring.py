@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 
+import broker_tags
 import config
 import news_patterns
 
-DIMENSIONS = ("technical", "chips", "news", "fundamental", "micron", "sox")
+DIMENSIONS = ("technical", "chips", "news", "fundamental", "micron", "sox", "intraday", "branch")
 
 # 可調參數（門檻、尺度、子訊號權重）。calibrate.py 會逐步調整這些。
 DEFAULT_PARAMS: dict = {
@@ -36,6 +37,20 @@ DEFAULT_PARAMS: dict = {
     "fund_yoy_div": 100.0, "fund_mom_div": 20.0,
     # 隔夜美股
     "us_scale": 3.0,
+    # 第七面：日內 1 分 K 子訊號尺度（飽和分母）
+    "id_vwap_div": 0.01,      # (close-vwap)/vwap / id_vwap_div
+    "id_tail_div": 0.01,      # (close-收盤前30分價)/價 / id_tail_div（尾盤動能）
+    "id_trend_div": 0.02,     # (close-open)/open / id_trend_div（日內趨勢）
+    "id_volconc_div": 0.3,    # (尾盤量佔比-0.5)/id_volconc_div（量能分布）
+    # 第七面子訊號權重（會被正規化）
+    "w_id_vwap": 0.25, "w_id_pos": 0.20, "w_id_tail": 0.25,
+    "w_id_trend": 0.20, "w_id_volconc": 0.10,
+    # 第八面：主力分點尺度（張）與子權重
+    "branch_net_div": 20000.0,    # 主力買賣超合計 / div
+    "branch_grp_div": 8000.0,     # 隔日沖/長線分點群淨額 / div（種子名單，弱）
+    "branch_smart_div": 12000.0,  # 行為式 polarity 加權淨額 / div
+    "w_br_net": 0.25, "w_br_conc": 0.20, "w_br_smart": 0.45,
+    "w_br_daytrade": 0.05, "w_br_longterm": 0.05,
 }
 
 
@@ -176,6 +191,25 @@ def _kw_polarity(title: str) -> int:
 NEWS_PATTERNS: dict = news_patterns.load_validated()
 
 
+def _load_branch_polarity() -> dict:
+    """載入 data/branch_polarity.json 的已驗證分點極性（由 validate_branches.py 產生）。
+
+    回傳 {branch: {"polarity": +1/-1/0}}；不存在則空（smart 子訊號不作用）。
+    """
+    f = config.DATA_DIR / "branch_polarity.json"
+    if f.exists():
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            return data.get("branches", {}) if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+# 行為式分點極性（聰明錢 +1 / 隔日沖反指標 -1）；oos_check 會以 train 期覆寫以防洩漏
+BRANCH_POLARITY: dict = _load_branch_polarity()
+
+
 def _score_news_validated(news_list: list[dict], p: dict) -> float | None:
     """以「已驗證型態極性」評分；無任何已驗證型態命中則回 None（交回退邏輯）。"""
     if not NEWS_PATTERNS:
@@ -251,11 +285,150 @@ def score_us(us_row: dict | None, params: dict | None = None) -> float:
     return clamp(pct / p["us_scale"])
 
 
+# ---------------- 第七面：日內 1 分 K（前一日走勢細節）----------------
+
+def intraday_signals(bars: list[dict] | None, params: dict | None = None) -> dict:
+    """由 D-1 的 1 分 K bars 萃取日內子訊號 [-1,1]：vwap / pos / tail / trend / volconc。
+
+    bars：單一交易日由早到晚的 1 分 bars（time/open/high/low/close/volume）。
+    各子訊號皆為純函式，缺資料則略過該項（不影響其他）。
+    """
+    p = params or PARAMS
+    out: dict = {}
+    if not bars or len(bars) < 2:
+        return out
+
+    opens = [_safe(b.get("open")) for b in bars]
+    highs = [_safe(b.get("high")) for b in bars]
+    lows = [_safe(b.get("low")) for b in bars]
+    closes = [_safe(b.get("close")) for b in bars]
+    vols = [_safe(b.get("volume"), 0.0) or 0.0 for b in bars]
+
+    day_open = next((o for o in opens if o is not None), None)
+    close = next((c for c in reversed(closes) if c is not None), None)
+    if day_open is None or close is None:
+        return out
+    day_high = max((h for h in highs if h is not None), default=None)
+    day_low = min((lo for lo in lows if lo is not None), default=None)
+
+    # VWAP 偏離：收盤相對日內成交量加權均價
+    num = den = 0.0
+    for h, lo, c, v in zip(highs, lows, closes, vols):
+        if None in (h, lo, c) or v <= 0:
+            continue
+        num += (h + lo + c) / 3.0 * v
+        den += v
+    if den > 0:
+        vwap = num / den
+        if vwap:
+            out["vwap"] = clamp((close - vwap) / vwap / p["id_vwap_div"])
+
+    # 收盤在日內高低區間的位置（收高=偏多）
+    if day_high is not None and day_low is not None and day_high > day_low:
+        out["pos"] = clamp((close - day_low) / (day_high - day_low) * 2 - 1)
+
+    # 尾盤動能：收盤相對「收盤前約 30 分鐘」價
+    ref_idx = max(0, len(closes) - 31)
+    ref_close = closes[ref_idx]
+    if ref_close:
+        out["tail"] = clamp((close - ref_close) / ref_close / p["id_tail_div"])
+
+    # 日內趨勢：開盤 -> 收盤
+    if day_open:
+        out["trend"] = clamp((close - day_open) / day_open / p["id_trend_div"])
+
+    # 量能分布：尾盤（後半段）量佔比偏離 0.5，乘尾盤方向
+    total_vol = sum(vols)
+    if total_vol > 0:
+        mid = len(vols) // 2
+        late_share = sum(vols[mid:]) / total_vol
+        dir_sign = 1.0 if close > day_open else (-1.0 if close < day_open else 0.0)
+        out["volconc"] = clamp((late_share - 0.5) / p["id_volconc_div"]) * dir_sign
+
+    return out
+
+
+def score_intraday(bars: list[dict] | None, params: dict | None = None) -> float:
+    p = params or PARAMS
+    sig = intraday_signals(bars, p)
+    return _wavg([
+        (sig.get("vwap", 0.0), p["w_id_vwap"]),
+        (sig.get("pos", 0.0), p["w_id_pos"]),
+        (sig.get("tail", 0.0), p["w_id_tail"]),
+        (sig.get("trend", 0.0), p["w_id_trend"]),
+        (sig.get("volconc", 0.0), p["w_id_volconc"]),
+    ]) if sig else 0.0
+
+
+# ---------------- 第八面：主力分點（券商分點 / 隔日沖辨識）----------------
+
+def branch_signals(rows: list[dict] | None, params: dict | None = None,
+                   wf_score: float | None = None) -> dict:
+    """由 D-1 券商分點買賣超萃取子訊號 [-1,1]：net / conc / smart / daytrade / longterm。
+
+    rows：單日分點列（branch / buy_lots / sell_lots / net_lots，net=買-賣，張）。
+    wf_score：branch_model 的 walk-forward 行為分數（優先作為 smart）；None 時退回全窗 polarity。
+    """
+    p = params or PARAMS
+    out: dict = {}
+    if not rows:
+        return out
+
+    nets = [_safe(r.get("net_lots"), 0.0) or 0.0 for r in rows]
+    total_net = sum(nets)
+    abs_sum = sum(abs(x) for x in nets)
+
+    # 主力買賣超合計（前 N 大分點淨額和）
+    out["net"] = clamp(total_net / p["branch_net_div"])
+
+    # 方向集中度：買賣方淨額一致度（正=買方主導）
+    if abs_sum > 0:
+        out["conc"] = clamp(total_net / abs_sum)
+
+    # 隔日沖分點群淨額：大買 -> 次日常倒貨，取負號（偏空）
+    dt_net = sum(n for n, r in zip(nets, rows)
+                 if broker_tags.classify(r.get("branch")) == "daytrade")
+    out["daytrade"] = clamp(-dt_net / p["branch_grp_div"])
+
+    # 長線/官股/外資分點群淨額：留倉 -> 偏多
+    lt_net = sum(n for n, r in zip(nets, rows)
+                 if broker_tags.classify(r.get("branch")) == "longterm")
+    out["longterm"] = clamp(lt_net / p["branch_grp_div"])
+
+    # 行為式聰明錢/隔日沖（smart）：用 branch_model 的 walk-forward 行為分數（無 look-ahead）。
+    # 無分數（暖身期）則不產生 smart 子訊號（該日分點面僅由 net/conc 構成）。
+    if wf_score is not None:
+        out["smart"] = clamp(wf_score)
+
+    return out
+
+
+def score_branch(rows: list[dict] | None, params: dict | None = None,
+                 wf_score: float | None = None) -> float:
+    p = params or PARAMS
+    sig = branch_signals(rows, p, wf_score)
+    return _wavg([
+        (sig.get("net", 0.0), p["w_br_net"]),
+        (sig.get("conc", 0.0), p["w_br_conc"]),
+        (sig.get("smart", 0.0), p["w_br_smart"]),
+        (sig.get("daytrade", 0.0), p["w_br_daytrade"]),
+        (sig.get("longterm", 0.0), p["w_br_longterm"]),
+    ]) if sig else 0.0
+
+
 # ---------------- 綜合 ----------------
 
 def combine(scores: dict, weights: dict, tau: float = 0.15) -> tuple[int, float]:
-    """回傳 (label, composite)。label: +1 偏多 / -1 偏空 / 0 中性。"""
-    composite = sum(weights.get(k, 0.0) * scores.get(k, 0.0) for k in DIMENSIONS)
+    """回傳 (label, composite)。label: +1 偏多 / -1 偏空 / 0 中性。
+
+    覆蓋率正規化：只對「當天有資料的面」（score 非 None）加權，並以其權重和重新正規化，
+    讓不同覆蓋率的交易日 composite 尺度一致（公平）。當天有資料的面權重全為 0 -> 中性。
+    """
+    active = [(weights.get(k, 0.0), scores[k]) for k in DIMENSIONS if scores.get(k) is not None]
+    wsum = sum(w for w, _ in active)
+    if wsum <= 0:
+        return 0, 0.0
+    composite = sum(w * s for w, s in active) / wsum
     if composite > tau:
         return 1, composite
     if composite < -tau:

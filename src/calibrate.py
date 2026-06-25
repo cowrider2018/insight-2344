@@ -37,13 +37,36 @@ CANDIDATES = {
     "w_bias": [0.05, 0.10, 0.20],       # 乖離（均值回歸）權重
     "w_volprice": [0.05, 0.10, 0.20],   # 量價權重
     "volprice_div": [0.5, 1.0, 2.0],    # 量價放大倍率（量增/量縮對方向的敏感度）
+    # 第七面：日內 1 分 K 子訊號尺度與權重（含 0 讓校準自動取捨）
+    "id_vwap_div": [0.005, 0.01, 0.02],
+    "id_tail_div": [0.005, 0.01, 0.02],
+    "id_trend_div": [0.01, 0.02, 0.04],
+    "id_volconc_div": [0.2, 0.3, 0.5],
+    "w_id_vwap": [0.0, 0.25, 0.40],
+    "w_id_pos": [0.0, 0.20, 0.40],
+    "w_id_tail": [0.0, 0.25, 0.40],
+    "w_id_trend": [0.0, 0.20, 0.40],
+    "w_id_volconc": [0.0, 0.10, 0.20],
+    # 第八面：主力分點
+    "branch_net_div": [10000.0, 20000.0, 40000.0],
+    "branch_grp_div": [4000.0, 8000.0, 16000.0],
+    "branch_smart_div": [6000.0, 12000.0, 24000.0],
+    "w_br_net": [0.0, 0.25, 0.50],
+    "w_br_conc": [0.0, 0.20, 0.40],
+    "w_br_smart": [0.0, 0.45, 0.70],
+    "w_br_daytrade": [0.0, 0.05, 0.20],
+    "w_br_longterm": [0.0, 0.05, 0.20],
 }
 
 
 def objective(feats: list[dict], params: dict) -> float:
-    """以該參數評分後，粗網格能達到的最高命中率（params 使訊號越準，上限越高）。"""
+    """以該參數評分後，粗網格能達到的最高命中率（params 使訊號越準，上限越高）。
+
+    套用第七面護欄：不顯著時不讓 intraday 權重灌水，校準才不會追逐 30 日小樣本雜訊。
+    """
     samples = bt.score_samples(feats, params)
     res = bt.optimize(samples, step=COARSE_STEP, tau_grid=COARSE_TAU)
+    res, _ = bt.apply_guard(samples, res)
     return res[0]["win_rate"]
 
 
@@ -80,7 +103,7 @@ def main(argv: list[str]) -> None:
     end = opt("--end", config.today_str()[:4] + "-12-31")
     tol = float(opt("--tol", str(bt.NEUTRAL_TOL)))
     rounds = int(opt("--rounds", "2"))
-    balance_tol = float(opt("--balance-tol", "0.02"))
+    balance_tol = float(opt("--balance-tol", "0.0"))  # 命中率第一優先（同前）
 
     tdb.init_db()
     with tdb.connect() as conn:
@@ -102,6 +125,7 @@ def main(argv: list[str]) -> None:
     # 以調適後參數 + 完整網格 + 平衡權重重算
     samples = bt.score_samples(feats, params)
     results = bt.optimize(samples)
+    results, guard = bt.apply_guard(samples, results)   # 顯著性護欄（含第七面）
     best = results[0]
     balanced = bt.pick_balanced(results, balance_tol)
     diagnostics = bt.signal_diagnostics(samples)
@@ -120,6 +144,13 @@ def main(argv: list[str]) -> None:
         "balance_tol": balance_tol,
         "raw_best": {"weights": best["weights"], "tau": best["tau"], "win_rate": best["win_rate"]},
         "coverage": coverage,
+        "blocked_dims": guard["blocked"],
+        "intraday_significant": guard["eligibility"]["intraday"]["significant"],
+        "intraday_active": guard["eligibility"]["intraday"]["active"],
+        "intraday_hit_rate": guard["eligibility"]["intraday"]["hit_rate"],
+        "dim_significance": {d: {"significant": g["significant"], "active": g["active"],
+                                 "hit_rate": g["hit_rate"]}
+                             for d, g in guard["eligibility"].items()},
         "calibrated": True,
         "score_params_file": "data/score_params.json",
     }

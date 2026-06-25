@@ -37,10 +37,14 @@ def main(argv: list[str]) -> None:
 
     k = int(len(feats) * split)
     tr, te = feats[:k], feats[k:]
+    # 註：第八面 smart 用 branch_model 的 walk-forward 分數（branch_wf 表，僅用 ≤d 資料），
+    # 本身無 look-ahead，故 OOS 不需特別覆寫。
 
     params, _ = cal.calibrate(tr, rounds)             # 只在 train 校參
-    res = bt.optimize(bt.score_samples(tr, params))   # 只在 train 選權重
-    bal = bt.pick_balanced(res, 0.02)
+    tr_samples = bt.score_samples(tr, params)
+    res = bt.optimize(tr_samples)                     # 只在 train 選權重
+    res, _ = bt.apply_guard(tr_samples, res)          # 同採用模型：顯著性護欄（只看 train）
+    bal = bt.pick_balanced(res, 0.0)                  # 命中率第一優先（同採用模型）
 
     ins = bt.evaluate(bt.score_samples(tr, params), bal["weights"], bal["tau"])
     oos = bt.evaluate(bt.score_samples(te, params), bal["weights"], bal["tau"])
