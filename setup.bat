@@ -35,8 +35,10 @@ echo [4/6] Backfill news/chips/revenue/candles from existing snapshots
 "%PY%" src\ingest.py --backfill-json
 
 echo.
-echo [5/6] Backfill daily candles (Fugle) and overnight US (Micron/SOX, Yahoo)
+echo [5/6] Backfill daily candles (Fugle), 1-min intraday (Fugle), broker branches (Fubon DJ) and overnight US (Yahoo)
 "%PY%" src\ingest.py --backfill-candles
+"%PY%" src\ingest.py --backfill-intraday
+"%PY%" src\ingest.py --backfill-branches
 "%PY%" src\ingest.py --backfill-us
 
 echo.

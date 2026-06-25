@@ -26,6 +26,16 @@ echo [1/4] Backfill historical chips (auto span from candles)
 if errorlevel 1 goto :err
 
 echo.
+echo [1b/4] Backfill 1-min intraday (Fugle) + broker branches: latest + ~6mo history (Fubon DJ)
+"%PY%" src\ingest.py --backfill-intraday
+"%PY%" src\ingest.py --backfill-branches
+"%PY%" src\ingest.py --backfill-branches-history
+
+echo.
+echo [1c/4] Build branch walk-forward behavioral model (per-broker weighted edge) -^> branch_wf table + data\branch_profiles.json
+"%PY%" src\branch_model.py
+
+echo.
 echo [2/4] Backtest with current params -^> data\weights.json + reports\backtest_*.md
 "%PY%" src\backtest.py %ARGS%
 if errorlevel 1 goto :err

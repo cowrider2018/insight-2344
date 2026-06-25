@@ -21,6 +21,10 @@ echo Using args: %ARGS%
 echo (override e.g. calibrate.bat --start 2025-07-01 --end 2026-06-23 --rounds 2)
 echo.
 
+echo [0/2] Build branch walk-forward behavioral model (per-broker weighted edge) -^> branch_wf table + data\branch_profiles.json
+"%PY%" src\branch_model.py
+
+echo.
 echo [1/2] Calibrate params -^> data\score_params.json, full grid -^> data\weights.json (balanced+calibrated)
 "%PY%" src\calibrate.py %ARGS%
 if errorlevel 1 goto :err
