@@ -28,7 +28,9 @@
 FUGLE_MARKETDATA_API_KEY=<你的富果金鑰>
 MAIL_TO=<你的 Email>
 ```
-寄信採 Gmail API + OAuth：需 `credentials.json`（Google Cloud Console 下載）；首次授權後自動產生 `token.json`。
+寄信採 Gmail API + OAuth：需 `credentials.json`（Google Cloud Console 下載）。`setup.bat` 最後一步會開瀏覽器要求登入授權，完成後自動產生 `token.json`，之後排程即可無頭寄信。
+
+> 為何要在 setup 授權：若沒有 `token.json`，每日排程的寄信步驟會落入互動式 OAuth 流程、開瀏覽器等人授權，在無人值守的 06:00 排程會卡住不動。先在 setup 完成一次授權即可避免。
 
 ---
 
@@ -42,7 +44,7 @@ MAIL_TO=<你的 Email>
 
 | 步驟 | 檔案 | 用途 | 等價手動（見路徑 B） |
 |---|---|---|---|
-| 1 | `setup.bat` | **建置環境**：安裝套件 + Playwright + 初始化時間軸 DB + 回補消息/K線/美股 | B-1 |
+| 1 | `setup.bat` | **建置環境**：建立 `.venv` + 安裝套件 + Playwright + 初始化時間軸 DB + 回補消息/K線/美股 + Gmail 授權（開瀏覽器登入一次） | B-1 |
 | 2（選用） | `backfill_history.bat` | 回補歷史籌碼 → 回測 → 消息型態驗證 → 樣本外複核（產生 `data\weights.json`、`data\news_patterns.json`） | B-2 |
 | 2'（選用） | `calibrate.bat` | 校準評分參數 + 重算平衡權重 → 樣本外複核（產生 `data\score_params.json`、`data\weights.json`） | B-2' |
 | 3 | `run_once.bat` | **立即執行一次**每日流程（抓資料 → Claude 分析 → 寄信） | B-3 |
@@ -55,13 +57,18 @@ MAIL_TO=<你的 Email>
 
 ### B-1 建置環境（＝ `setup.bat`）
 ```powershell
+python -m venv .venv                                 # 建立虛擬環境（套件不裝到全域 / WindowsApps）
+.\.venv\Scripts\Activate.ps1                         # 啟用 .venv（之後 B-2 / B-2' / B-3 指令都在此環境下執行）
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 python -m playwright install chromium
 python src\timeline_db.py --init
 python src\ingest.py --backfill-json
 python src\ingest.py --backfill-candles
 python src\ingest.py --backfill-us
+python -c "import sys; sys.path.insert(0,'src'); import send_email; send_email._gmail_service()"  # Gmail 授權，開瀏覽器登入一次 -> token.json
 ```
+> 所有腳本都以專案 `.venv` 執行：`setup.bat` / `backfill_history.bat` / `calibrate.bat` 會自動使用 `.venv\Scripts\python.exe`，`src\run_daily.ps1`（排程）亦優先採用 `.venv`，找不到才退回 PATH。手動執行請先 `Activate.ps1` 啟用。
 
 ### B-2 回補歷史 + 重算權重（＝ `backfill_history.bat`，以「當前已校準參數」重算）
 ```powershell
