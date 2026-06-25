@@ -85,6 +85,34 @@ CREATE TABLE IF NOT EXISTS us_market (
     change_pct REAL,
     PRIMARY KEY (symbol, date)
 );
+
+CREATE TABLE IF NOT EXISTS candles_1min (
+    symbol TEXT NOT NULL,
+    date   TEXT NOT NULL,                    -- 交易日 YYYY-MM-DD
+    time   TEXT NOT NULL,                    -- HH:MM
+    open   REAL, high REAL, low REAL, close REAL,
+    volume INTEGER,
+    PRIMARY KEY (symbol, date, time)
+);
+CREATE INDEX IF NOT EXISTS idx_1min_date ON candles_1min(symbol, date);
+
+CREATE TABLE IF NOT EXISTS broker_branches (
+    symbol    TEXT NOT NULL,
+    date      TEXT NOT NULL,                 -- 資料日(D-1 盤後) YYYY-MM-DD
+    branch    TEXT NOT NULL,                 -- 券商分點名稱
+    buy_lots  REAL,
+    sell_lots REAL,
+    net_lots  REAL,                          -- 買進-賣出（張），正=買超、負=賣超
+    PRIMARY KEY (symbol, date, branch)
+);
+CREATE INDEX IF NOT EXISTS idx_branch_date ON broker_branches(symbol, date);
+
+CREATE TABLE IF NOT EXISTS branch_wf (
+    symbol TEXT NOT NULL,
+    date   TEXT NOT NULL,                    -- 交易日 d；score 由 <=d 資料算、用於預測 d+1
+    score  REAL,                             -- walk-forward 主力分點行為分數 [-1,1]
+    PRIMARY KEY (symbol, date)
+);
 """
 
 
@@ -191,6 +219,26 @@ def upsert_us(conn: sqlite3.Connection, symbol_key: str, rows: Iterable[dict]) -
     return n
 
 
+def upsert_intraday(conn: sqlite3.Connection, symbol: str, date: str, bars: Iterable[dict]) -> int:
+    """寫入單一交易日的 1 分 K bars（冪等）。bars 須含 time/open/high/low/close/volume。"""
+    dd = _norm_date(date)
+    if not dd:
+        return 0
+    n = 0
+    for b in bars:
+        if not b.get("time"):
+            continue
+        conn.execute(
+            """INSERT OR REPLACE INTO candles_1min
+               (symbol, date, time, open, high, low, close, volume)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (symbol, dd, b["time"], b.get("open"), b.get("high"),
+             b.get("low"), b.get("close"), b.get("volume")),
+        )
+        n += 1
+    return n
+
+
 # ---- query ----
 
 def news_in_window(conn: sqlite3.Connection, symbol: str, start_iso: str, end_iso: str) -> list[dict]:
@@ -248,9 +296,93 @@ def us_asof(conn: sqlite3.Connection, symbol_key: str, before_date: str) -> dict
     return dict(row) if row else None
 
 
+def upsert_branches(conn: sqlite3.Connection, symbol: str, date: str, rows: Iterable[dict]) -> int:
+    """寫入單一交易日的券商分點買賣超（冪等）。rows 須含 branch/buy_lots/sell_lots/net_lots。"""
+    dd = _norm_date(date)
+    if not dd:
+        return 0
+    n = 0
+    for r in rows:
+        br = (r.get("branch") or "").strip()
+        if not br:
+            continue
+        conn.execute(
+            """INSERT OR REPLACE INTO broker_branches
+               (symbol, date, branch, buy_lots, sell_lots, net_lots)
+               VALUES (?,?,?,?,?,?)""",
+            (symbol, dd, br, r.get("buy_lots"), r.get("sell_lots"), r.get("net_lots")),
+        )
+        n += 1
+    return n
+
+
+def upsert_branch_wf(conn: sqlite3.Connection, symbol: str, rows: Iterable[dict]) -> int:
+    """寫入 walk-forward 主力分點日分數（冪等）。rows 須含 date/score。"""
+    n = 0
+    for r in rows:
+        dd = _norm_date(r.get("date"))
+        if not dd:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO branch_wf (symbol, date, score) VALUES (?,?,?)",
+            (symbol, dd, r.get("score")),
+        )
+        n += 1
+    return n
+
+
+def branch_wf_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> dict | None:
+    """取 date < before_date 的最新 walk-forward 分點分數（盤前可得的 D-1 值）。"""
+    row = conn.execute(
+        """SELECT date, score FROM branch_wf WHERE symbol = ? AND date < ?
+           ORDER BY date DESC LIMIT 1""",
+        (symbol, before_date),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def branches_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> list[dict] | None:
+    """取 date < before_date 的最新交易日全部分點列（盤前可得的 D-1 主力進出）。
+
+    強制 date < D，無 look-ahead。回傳分點 dict list（依淨額降序），無則 None。
+    """
+    row = conn.execute(
+        "SELECT MAX(date) AS d FROM broker_branches WHERE symbol = ? AND date < ?",
+        (symbol, before_date),
+    ).fetchone()
+    if not row or not row["d"]:
+        return None
+    rows = conn.execute(
+        """SELECT date, branch, buy_lots, sell_lots, net_lots FROM broker_branches
+           WHERE symbol = ? AND date = ? ORDER BY net_lots DESC""",
+        (symbol, row["d"]),
+    ).fetchall()
+    return [dict(r) for r in rows] if rows else None
+
+
+def intraday_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> list[dict] | None:
+    """取 date < before_date 的最新一個交易日全部 1 分 K bars（盤前可得的 D-1 盤中）。
+
+    強制 date < D，無 look-ahead。回傳由早到晚排序的 bars，無則 None。
+    """
+    row = conn.execute(
+        "SELECT MAX(date) AS d FROM candles_1min WHERE symbol = ? AND date < ?",
+        (symbol, before_date),
+    ).fetchone()
+    if not row or not row["d"]:
+        return None
+    rows = conn.execute(
+        """SELECT date, time, open, high, low, close, volume FROM candles_1min
+           WHERE symbol = ? AND date = ? ORDER BY time""",
+        (symbol, row["d"]),
+    ).fetchall()
+    return [dict(r) for r in rows] if rows else None
+
+
 def counts(conn: sqlite3.Connection) -> dict:
     out = {}
-    for t in ("news", "chips", "revenue", "candles", "us_market"):
+    for t in ("news", "chips", "revenue", "candles", "us_market", "candles_1min",
+              "broker_branches", "branch_wf"):
         out[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
     return out
 

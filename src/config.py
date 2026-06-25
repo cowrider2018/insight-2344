@@ -52,6 +52,9 @@ TWSE_RWD = "https://www.twse.com.tw/rwd/zh"
 
 CMONEY_FORUM_URL = f"https://www.cmoney.tw/forum/stock/{SYMBOL}"
 
+# 富邦 DJ「個股主力進出」（券商分點買賣超）；憑證有 SKI 問題，抓取須 verify=False
+DJ_CHIPS_URL = f"https://fubon-ebrokerdj.fbs.com.tw/z/zc/zco/zco_{SYMBOL}_1.djhtm"
+
 # ---- Email（Gmail API + OAuth，全程不需密碼）----
 # OAuth 用戶端憑證（Google Cloud Console 下載的 credentials.json）
 GMAIL_CREDENTIALS = ROOT / os.getenv("GMAIL_CREDENTIALS_FILE", "credentials.json")

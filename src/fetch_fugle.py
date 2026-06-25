@@ -63,6 +63,51 @@ def fetch_candles(days: int = 360) -> list[dict]:
     return candles
 
 
+def fetch_intraday_candles(date_iso: str, timeframe: str = "1") -> list[dict]:
+    """單一交易日的 1 分 K（Fugle 僅保留近 30 個交易日的盤中資料）。
+
+    回傳該日由早到晚的 bars：{time(HH:MM), open, high, low, close, volume}。
+    防禦式解析：查無資料/欄位缺漏/逾 30 日皆回空 list，不中斷整體流程。
+    注意：Fugle 盤中 K 參數名（timeframe/resolution）與時戳欄位（date/datetime）依方案略異，
+    故對欄位逐一容錯。
+    """
+    try:
+        js = _get(
+            f"historical/candles/{config.SYMBOL}",
+            {
+                "from": date_iso,
+                "to": date_iso,
+                "timeframe": timeframe,
+                "fields": "open,high,low,close,volume",
+            },
+        )
+    except requests.RequestException:
+        return []
+    rows = js.get("data", []) or []
+    bars = []
+    for row in rows:
+        ts = row.get("date") or row.get("datetime") or row.get("time")
+        if not ts:
+            continue
+        ts = str(ts)
+        hhmm = ts[11:16] if len(ts) >= 16 and ts[10] in ("T", " ") else ts
+        try:
+            bars.append(
+                {
+                    "time": hhmm,
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": int(row.get("volume") or 0),
+                }
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+    bars.sort(key=lambda b: b["time"])
+    return bars
+
+
 def fetch_stats() -> dict:
     """historical/stats：52 週高低、估值等（欄位視方案而定，缺則 None）。"""
     try:
@@ -82,7 +127,7 @@ def fetch_quote() -> dict:
 def build(warnings: list[str]) -> dict:
     """回傳 (quote, technical, fundamental) 三區塊與 trading_date。"""
     out = {"quote": {}, "technical": {}, "fundamental": {}, "trading_date": None,
-           "name": config.NAME}
+           "name": config.NAME, "intraday": None}
 
     candles = fetch_candles()
     if not candles:
@@ -110,6 +155,16 @@ def build(warnings: list[str]) -> dict:
     }
 
     out["technical"] = indicators.compute_all(candles)
+
+    # 第七面：當日（剛收盤那一交易日）的 1 分 K，供累積至時間軸 DB
+    try:
+        bars = fetch_intraday_candles(last["date"])
+        out["intraday"] = {"date": last["date"], "bars": bars}
+        if not bars:
+            warnings.append("fugle: 當日 1 分 K 無資料（逾 30 日或盤中端點權限）")
+    except requests.RequestException as e:
+        warnings.append(f"fugle: 1 分 K 抓取失敗 {e}")
+        out["intraday"] = {"date": last["date"], "bars": []}
 
     stats = fetch_stats()
     quote = fetch_quote().get("quote", {})
