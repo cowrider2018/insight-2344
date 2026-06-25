@@ -31,9 +31,15 @@ function Resolve-Exe {
     return $Name   # 最後退回名稱，交給 PATH 解析
 }
 
-$py = Resolve-Exe -Name "python" -Globs @(
-    "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe"
-)
+# 優先使用專案 .venv（setup.bat 建立）；找不到才退回 PATH / 已知安裝位置。
+$venvPy = Join-Path $proj ".venv\Scripts\python.exe"
+if (Test-Path $venvPy) {
+    $py = $venvPy
+} else {
+    $py = Resolve-Exe -Name "python" -Globs @(
+        "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe"
+    )
+}
 $claude = Resolve-Exe -Name "claude" -Globs @(
     "$env:USERPROFILE\.local\bin\claude.exe",
     "$env:APPDATA\npm\claude.cmd",
