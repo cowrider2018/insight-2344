@@ -56,6 +56,13 @@ CANDIDATES = {
     "w_br_smart": [0.0, 0.45, 0.70],
     "w_br_daytrade": [0.0, 0.05, 0.20],
     "w_br_longterm": [0.0, 0.05, 0.20],
+    # 第九面：TDCC 千張大戶（含 0 讓校準自動取捨）
+    "holder_chg1w_div": [0.3, 0.5, 1.0],
+    "holder_chg4w_div": [0.5, 1.0, 2.0],
+    "holder_retail_div": [0.5, 1.0, 2.0],
+    "w_hd_chg1w": [0.0, 0.5, 0.7],
+    "w_hd_chg4w": [0.0, 0.4, 0.6],
+    "w_hd_retail": [0.0, 0.1, 0.2],
 }
 
 

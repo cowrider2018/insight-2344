@@ -113,7 +113,21 @@ CREATE TABLE IF NOT EXISTS branch_wf (
     score  REAL,                             -- walk-forward 主力分點行為分數 [-1,1]
     PRIMARY KEY (symbol, date)
 );
+
+CREATE TABLE IF NOT EXISTS tdcc_holders (
+    symbol     TEXT NOT NULL,
+    data_date  TEXT NOT NULL,                -- 集保資料日(週結算) YYYY-MM-DD
+    avail_date TEXT NOT NULL,                -- 公布可得日 = data_date + lag（無 look-ahead 用此比較）
+    big_pct    REAL,                         -- 千張大戶(≥1,000,001股)占比%
+    mid_pct    REAL,                         -- 400,001~1,000,000股(中實戶)占比%
+    retail_pct REAL,                         -- 1~999股(零股散戶)占比%
+    PRIMARY KEY (symbol, data_date)
+);
+CREATE INDEX IF NOT EXISTS idx_tdcc_avail ON tdcc_holders(symbol, avail_date);
 """
+
+# 集保分散表公布 lag（資料日為週結算、隔週才公布）；保守取 +7 天避免 look-ahead
+TDCC_LAG_DAYS = 7
 
 
 @contextmanager
@@ -140,6 +154,13 @@ def _norm_date(d: str | None) -> str | None:
     if re.fullmatch(r"\d{8}", s):  # YYYYMMDD
         return f"{s[:4]}-{s[4:6]}-{s[6:]}"
     return s
+
+
+def _add_days(d_iso: str, days: int) -> str:
+    """YYYY-MM-DD + days -> YYYY-MM-DD。"""
+    from datetime import date as _date, timedelta
+    y, m, dd = (int(x) for x in d_iso.split("-"))
+    return (_date(y, m, dd) + timedelta(days=days)).isoformat()
 
 
 # ---- upsert ----
@@ -331,6 +352,46 @@ def upsert_branch_wf(conn: sqlite3.Connection, symbol: str, rows: Iterable[dict]
     return n
 
 
+def upsert_tdcc(conn: sqlite3.Connection, symbol: str, data_date: str | None,
+                big_pct, mid_pct, retail_pct, lag_days: int = TDCC_LAG_DAYS) -> None:
+    """寫入單一週集保大戶持股（冪等）。avail_date = data_date + lag（公布可得日）。"""
+    dd = _norm_date(data_date)
+    if not dd:
+        return
+    conn.execute(
+        """INSERT OR REPLACE INTO tdcc_holders
+           (symbol, data_date, avail_date, big_pct, mid_pct, retail_pct)
+           VALUES (?,?,?,?,?,?)""",
+        (symbol, dd, _add_days(dd, lag_days), big_pct, mid_pct, retail_pct),
+    )
+
+
+def tdcc_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> dict | None:
+    """取 avail_date < before_date 的最新一筆大戶持股，附 big_chg_1w/4w 與 retail_chg_1w。
+
+    以**公布日(avail_date)** 比較，無 look-ahead；變化量取「已公布」週序列往回第 1、4 筆計差。
+    """
+    rows = conn.execute(
+        """SELECT data_date, avail_date, big_pct, mid_pct, retail_pct FROM tdcc_holders
+           WHERE symbol = ? AND avail_date < ?
+           ORDER BY data_date DESC LIMIT 5""",
+        (symbol, before_date),
+    ).fetchall()
+    if not rows:
+        return None
+    cur = dict(rows[0])
+
+    def _chg(field: str, i: int):
+        if cur.get(field) is None or len(rows) <= i or rows[i][field] is None:
+            return None
+        return round(cur[field] - rows[i][field], 4)
+
+    cur["big_chg_1w"] = _chg("big_pct", 1)
+    cur["big_chg_4w"] = _chg("big_pct", 4)
+    cur["retail_chg_1w"] = _chg("retail_pct", 1)
+    return cur
+
+
 def branch_wf_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> dict | None:
     """取 date < before_date 的最新 walk-forward 分點分數（盤前可得的 D-1 值）。"""
     row = conn.execute(
@@ -382,7 +443,7 @@ def intraday_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> li
 def counts(conn: sqlite3.Connection) -> dict:
     out = {}
     for t in ("news", "chips", "revenue", "candles", "us_market", "candles_1min",
-              "broker_branches", "branch_wf"):
+              "broker_branches", "branch_wf", "tdcc_holders"):
         out[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
     return out
 

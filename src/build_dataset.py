@@ -9,6 +9,7 @@ import json
 import config
 import fetch_dj_chips
 import fetch_fugle
+import fetch_tdcc
 import fetch_twse
 import fetch_us
 import scrape_cmoney
@@ -69,6 +70,14 @@ def build() -> dict:
         branch = {"date": None, "rows": []}
     status["dj"] = "ok" if branch.get("rows") else "partial"
 
+    # --- TDCC 千張大戶（集保分散表，第九面）---
+    try:
+        holders = fetch_tdcc.fetch_holders(warnings=warnings)
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"tdcc 例外: {e}")
+        holders = None
+    status["tdcc"] = "ok" if holders else "partial"
+
     dataset = {
         "symbol": config.SYMBOL,
         "name": fg.get("name", config.NAME),
@@ -83,6 +92,7 @@ def build() -> dict:
         "overnight": overnight,
         "intraday": fg.get("intraday"),       # 第七面：當日 1 分 K（供累積）
         "branch": branch,                     # 第八面：主力分點（供累積）
+        "holders": holders or {},             # 第九面：TDCC 千張大戶（當週，供累積）
         "source_status": status,
     }
     return dataset
@@ -95,8 +105,9 @@ def main():
     s = dataset["source_status"]
     print(f"[build_dataset] 寫入 {out}")
     print(f"  fugle={s['fugle']} twse={s['twse']} cmoney={s['cmoney']} us={s.get('us')} "
-          f"dj={s.get('dj')} news={len(dataset['news'])} "
-          f"branch={len(dataset.get('branch', {}).get('rows', []))} trading_date={dataset['trading_date']}")
+          f"dj={s.get('dj')} tdcc={s.get('tdcc')} news={len(dataset['news'])} "
+          f"branch={len(dataset.get('branch', {}).get('rows', []))} "
+          f"holders={'y' if dataset.get('holders') else 'n'} trading_date={dataset['trading_date']}")
     if s["warnings"]:
         print("  warnings:")
         for w in s["warnings"]:
@@ -110,7 +121,8 @@ def main():
         st = ingest.ingest_dataset(dataset)
         print(f"  timeline_db: news+{st['news']} chips+{st['chips']} "
               f"revenue+{st['revenue']} candles+{st['candles']} us+{st.get('us', 0)} "
-              f"intraday+{st.get('intraday', 0)} branch+{st.get('branch', 0)}")
+              f"intraday+{st.get('intraday', 0)} branch+{st.get('branch', 0)} "
+              f"holders+{st.get('holders', 0)}")
     except Exception as e:  # noqa: BLE001
         print(f"  timeline_db 攝取略過: {e}")
     return out

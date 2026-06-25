@@ -14,7 +14,8 @@ import broker_tags
 import config
 import news_patterns
 
-DIMENSIONS = ("technical", "chips", "news", "fundamental", "micron", "sox", "intraday", "branch")
+DIMENSIONS = ("technical", "chips", "news", "fundamental", "micron", "sox", "intraday",
+              "branch", "holders")
 
 # 可調參數（門檻、尺度、子訊號權重）。calibrate.py 會逐步調整這些。
 DEFAULT_PARAMS: dict = {
@@ -51,6 +52,11 @@ DEFAULT_PARAMS: dict = {
     "branch_smart_div": 12000.0,  # 行為式 polarity 加權淨額 / div
     "w_br_net": 0.25, "w_br_conc": 0.20, "w_br_smart": 0.45,
     "w_br_daytrade": 0.05, "w_br_longterm": 0.05,
+    # 第九面：TDCC 千張大戶持股比率（占比為百分點，週/月變化以百分點計）
+    "holder_chg1w_div": 0.5,    # 大戶比率週變化(pp)/div 飽和
+    "holder_chg4w_div": 1.0,    # 大戶比率月變化(pp)/div
+    "holder_retail_div": 1.0,   # 散戶比率週變化(pp)/div（上升=分散=偏空，取負）
+    "w_hd_chg1w": 0.5, "w_hd_chg4w": 0.4, "w_hd_retail": 0.1,
 }
 
 
@@ -413,6 +419,40 @@ def score_branch(rows: list[dict] | None, params: dict | None = None,
         (sig.get("smart", 0.0), p["w_br_smart"]),
         (sig.get("daytrade", 0.0), p["w_br_daytrade"]),
         (sig.get("longterm", 0.0), p["w_br_longterm"]),
+    ]) if sig else 0.0
+
+
+# ---------------- 第九面：TDCC 千張大戶持股比率 ----------------
+
+def holders_signals(row: dict | None, params: dict | None = None) -> dict:
+    """由集保大戶持股比率變化萃取子訊號 [-1,1]：chg1w / chg4w / retail。
+
+    row：tdcc_asof 回傳（big_pct + big_chg_1w/4w + retail_chg_1w，皆百分點）。
+    大戶比率上升（吃貨）= 偏多；散戶比率上升（籌碼分散）= 偏空（取負）。
+    """
+    p = params or PARAMS
+    out: dict = {}
+    if not row:
+        return out
+    c1 = _safe(row.get("big_chg_1w"))
+    if c1 is not None:
+        out["chg1w"] = clamp(c1 / p["holder_chg1w_div"])
+    c4 = _safe(row.get("big_chg_4w"))
+    if c4 is not None:
+        out["chg4w"] = clamp(c4 / p["holder_chg4w_div"])
+    rc = _safe(row.get("retail_chg_1w"))
+    if rc is not None:
+        out["retail"] = clamp(-rc / p["holder_retail_div"])
+    return out
+
+
+def score_holders(row: dict | None, params: dict | None = None) -> float:
+    p = params or PARAMS
+    sig = holders_signals(row, p)
+    return _wavg([
+        (sig.get("chg1w", 0.0), p["w_hd_chg1w"]),
+        (sig.get("chg4w", 0.0), p["w_hd_chg4w"]),
+        (sig.get("retail", 0.0), p["w_hd_retail"]),
     ]) if sig else 0.0
 
 

@@ -85,7 +85,7 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
     candles = tdb.candles_upto(conn, symbol)  # 由舊到新
     feats: list[dict] = []
     coverage = {"chips": 0, "news": 0, "fundamental": 0, "micron": 0, "sox": 0,
-                "intraday": 0, "branch": 0}
+                "intraday": 0, "branch": 0, "holders": 0}
 
     for i in range(1, len(candles)):
         D = candles[i]
@@ -127,9 +127,12 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
         branch_wf = tdb.branch_wf_asof(conn, symbol, d_date)  # D-1（或更早）walk-forward 分數
         assert branch_wf is None or branch_wf["date"] < d_date, "look-ahead: 分點 wf 超過 D"
 
+        holders = tdb.tdcc_asof(conn, symbol, d_date)  # 公布日 < D 的最新集保大戶持股
+        assert holders is None or holders["avail_date"] < d_date, "look-ahead: 集保大戶公布日超過 D"
+
         for key, present in (("chips", chips), ("news", news), ("fundamental", rev),
                              ("micron", mu), ("sox", sox), ("intraday", intraday),
-                             ("branch", branch)):
+                             ("branch", branch), ("holders", holders)):
             if present:
                 coverage[key] += 1
 
@@ -139,7 +142,7 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
             "technical": technical, "prev_close": prev_close,
             "chips": chips, "ref_vol_lots": ref_vol_lots,
             "news": news, "rev": rev, "mu": mu, "sox": sox, "intraday": intraday,
-            "branch": branch, "branch_wf": branch_wf,
+            "branch": branch, "branch_wf": branch_wf, "holders": holders,
             "change_pct": round(pct, 2),
             "actual": label_from_pct(pct, tol),
         })
@@ -156,6 +159,7 @@ def score_samples(feats: list[dict], params: dict | None = None) -> list[dict]:
         wf = f.get("branch_wf")
         wf_score = wf.get("score") if wf else None
         br_sub = scoring.branch_signals(f["branch"], p, wf_score) if f.get("branch") else {}
+        hd_sub = scoring.holders_signals(f["holders"], p) if f.get("holders") else {}
         # 「無資料」一律以 None 表示（combine 會跳過並重新正規化權重 -> 公平）
         scores = {
             "technical": scoring.score_technical(f["technical"], f["prev_close"], p),
@@ -166,9 +170,11 @@ def score_samples(feats: list[dict], params: dict | None = None) -> list[dict]:
             "sox": scoring.score_us(f["sox"], p) if f["sox"] else None,
             "intraday": scoring.score_intraday(f["intraday"], p) if f.get("intraday") else None,
             "branch": scoring.score_branch(f["branch"], p, wf_score) if f.get("branch") else None,
+            "holders": scoring.score_holders(f["holders"], p) if f.get("holders") else None,
         }
         samples.append({"date": f["date"], "scores": scores, "subsignals": sub,
                         "id_subsignals": id_sub, "branch_subsignals": br_sub,
+                        "hd_subsignals": hd_sub,
                         "change_pct": f["change_pct"], "actual": f["actual"]})
     return samples
 
@@ -297,7 +303,8 @@ def signal_diagnostics(samples: list[dict]) -> list[dict]:
     keys = [("dim", d) for d in scoring.DIMENSIONS] + \
            [("sub", s) for s in ("ma", "kd", "rsi", "macd", "bias", "volprice")] + \
            [("idsub", s) for s in ("vwap", "pos", "tail", "trend", "volconc")] + \
-           [("brsub", s) for s in ("net", "conc", "smart", "daytrade", "longterm")]
+           [("brsub", s) for s in ("net", "conc", "smart", "daytrade", "longterm")] + \
+           [("hdsub", s) for s in ("chg1w", "chg4w", "retail")]
     for kind, name in keys:
         active = hit = 0
         for s in samples:
@@ -307,8 +314,10 @@ def signal_diagnostics(samples: list[dict]) -> list[dict]:
                 val = s["subsignals"].get(name)
             elif kind == "idsub":
                 val = s.get("id_subsignals", {}).get(name)
-            else:
+            elif kind == "brsub":
                 val = s.get("branch_subsignals", {}).get(name)
+            else:
+                val = s.get("hd_subsignals", {}).get(name)
             if val is None:
                 continue
             sgn = 1 if val > 0 else (-1 if val < 0 else 0)
@@ -337,7 +346,8 @@ def baseline_single_dim(samples: list[dict], tau: float = 0.15) -> dict:
 
 
 _DIM_ZH = {"technical": "技術", "chips": "籌碼", "news": "消息", "fundamental": "基本",
-           "micron": "美光", "sox": "費半", "intraday": "日內", "branch": "分點"}
+           "micron": "美光", "sox": "費半", "intraday": "日內", "branch": "分點",
+           "holders": "大戶"}
 
 
 _SUB_ZH = {"ma": "均線", "kd": "KD", "rsi": "RSI", "macd": "MACD", "bias": "乖離", "volprice": "量價"}
@@ -349,6 +359,9 @@ _IDSUB_ZH = {"vwap": "VWAP偏離", "pos": "收盤位置", "tail": "尾盤動能"
 
 _BRSUB_ZH = {"net": "主力淨額", "conc": "集中度", "smart": "聰明錢(行為)",
              "daytrade": "隔日沖(名單)", "longterm": "長線(名單)"}
+
+
+_HDSUB_ZH = {"chg1w": "大戶週變", "chg4w": "大戶月變", "retail": "散戶背離"}
 
 
 def _wstr(weights: dict) -> str:
@@ -405,9 +418,10 @@ def write_report(samples, coverage, results, start, end, tol, path, balanced=Non
         ]
         for r in diagnostics:
             label = (_DIM_ZH.get(r["name"]) or _SUB_ZH.get(r["name"])
-                     or _IDSUB_ZH.get(r["name"]) or _BRSUB_ZH.get(r["name"], r["name"]))
+                     or _IDSUB_ZH.get(r["name"]) or _BRSUB_ZH.get(r["name"])
+                     or _HDSUB_ZH.get(r["name"], r["name"]))
             kind = {"dim": "面", "sub": "技術子訊號", "idsub": "日內子訊號",
-                    "brsub": "分點子訊號"}[r["kind"]]
+                    "brsub": "分點子訊號", "hdsub": "大戶子訊號"}[r["kind"]]
             lines.append(f"| {kind} | {label} | {r['hit_rate']:.2%} | {r['active']} |")
 
     lines += ["", "## 單面基準命中率（weight=1 單押該面，tau=0.15）", "| 面向 | 命中率 |", "|---|---|"]
@@ -433,6 +447,8 @@ def write_report(samples, coverage, results, start, end, tol, path, balanced=Non
         "coverage 與逐面顯著性（dim_significance）見 data/weights.json。",
         f"- 第八面（主力分點）僅 {coverage.get('branch', 0)}/{n} 日有資料（富邦 DJ 僅提供最新一日，"
         "歷史無法回補，須每日累積）；隔日沖/長線分類為人工種子名單，待累積後以行為統計精進。",
+        f"- 第九面（TDCC 千張大戶）{coverage.get('holders', 0)}/{n} 日有資料（集保週頻、公布有 lag，"
+        "以公布日 avail_date<D 比較）；週變化緩、單股訊號可能弱，未達顯著門檻時權重被護欄歸 0。",
         "- 基本面（月營收）變動緩慢且舊月難回補，貢獻有限。",
         "- 隔夜美光/費半為強外生訊號，但與大盤高度相關，須留意過擬合；建議以樣本外驗證複核。",
         "- 本回測無交易成本/滑價假設，命中率非報酬率，僅供權重相對比較。",

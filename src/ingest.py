@@ -30,7 +30,7 @@ def ingest_dataset(dataset: dict, conn=None) -> dict:
 
     def _do(conn):
         stats = {"news": 0, "chips": 0, "revenue": 0, "candles": 0, "us": 0,
-                 "intraday": 0, "branch": 0}
+                 "intraday": 0, "branch": 0, "holders": 0}
         stats["news"] = tdb.upsert_news(conn, dataset.get("news", []) or [], symbol, ingested_at)
 
         chips = dataset.get("chips") or {}
@@ -66,6 +66,13 @@ def ingest_dataset(dataset: dict, conn=None) -> dict:
         brows = branch.get("rows") or []
         stats["branch"] = (tdb.upsert_branches(conn, symbol, branch["date"], brows)
                            if branch.get("date") and brows else 0)
+
+        # 第九面：TDCC 千張大戶（集保週頻，OpenData 當週；歷史以 backfill_tdcc 回補）
+        holders = dataset.get("holders") or {}
+        if holders.get("data_date") and holders.get("big_pct") is not None:
+            tdb.upsert_tdcc(conn, symbol, holders["data_date"], holders.get("big_pct"),
+                            holders.get("mid_pct"), holders.get("retail_pct"))
+            stats["holders"] = 1
         return stats
 
     if conn is not None:
@@ -267,6 +274,50 @@ def backfill_chips(start: str | None = None, end: str | None = None) -> int:
     return fetched
 
 
+def backfill_tdcc(start: str | None = None, end: str | None = None) -> int:
+    """逐週回補 TDCC 集保大戶持股（smart.tdcc 約保留近一年週資料）。
+
+    自查詢頁取可用週日期清單，篩 [start, end]（以資料日比較），只抓尚未存在者。
+    """
+    import time
+
+    import fetch_tdcc
+    tdb.init_db()
+    warnings: list[str] = []
+    dates = fetch_tdcc.available_dates(warnings)  # YYYYMMDD，新到舊
+    if not dates:
+        print(f"[backfill_tdcc] 無可用週日期；warnings: {warnings}")
+        return 0
+
+    def _iso(d: str) -> str:
+        return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+
+    sel = [d for d in dates
+           if (not start or _iso(d) >= start) and (not end or _iso(d) <= end)]
+    total = 0
+    with tdb.connect() as conn:
+        existing = {r["data_date"] for r in conn.execute(
+            "SELECT data_date FROM tdcc_holders WHERE symbol = ?", (config.SYMBOL,)).fetchall()}
+        print(f"[backfill_tdcc] 候選 {len(sel)} 週（逐週查 smart.tdcc，較慢）")
+        for d in sel:
+            if _iso(d) in existing:
+                continue
+            row = fetch_tdcc.fetch_history(d, warnings)
+            if not row or row.get("big_pct") is None:
+                continue
+            tdb.upsert_tdcc(conn, config.SYMBOL, row["data_date"], row.get("big_pct"),
+                            row.get("mid_pct"), row.get("retail_pct"))
+            total += 1
+            if total % 10 == 0:
+                conn.commit()
+                print(f"  ...已回補 {total} 週（最新 {row['data_date']}）")
+            time.sleep(0.25)  # 友善節流
+    print(f"[backfill_tdcc] 回補 {total} 週大戶持股")
+    if warnings:
+        print(f"  warnings: {len(warnings)} 則")
+    return total
+
+
 def main(argv: list[str]) -> None:
     if "--backfill-json" in argv:
         backfill_from_json()
@@ -289,6 +340,11 @@ def main(argv: list[str]) -> None:
         start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
         end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None
         backfill_chips(start, end)
+    if "--backfill-tdcc" in argv:
+        i = argv.index("--backfill-tdcc")
+        start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
+        end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None
+        backfill_tdcc(start, end)
     if len(argv) <= 1:
         print(__doc__)
 

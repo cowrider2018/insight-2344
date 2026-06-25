@@ -1,6 +1,6 @@
 # 2344 華邦電 每日盤前走勢分析
 
-每天上午 06:00 自動抓取**六面**標準化資料（技術 / 基本 / 籌碼 / 消息 / 美光 / 費半），由 Claude 依回測最佳權重做當日盤前走勢研判，產出報告並 email。
+每天上午 06:00 自動抓取**九面**標準化資料（技術 / 基本 / 籌碼 / 消息 / 美光 / 費半 / 日內 1 分 K / 主力分點 / TDCC 千張大戶），由 Claude 依回測最佳權重做當日盤前走勢研判，產出報告並 email。
 
 ## 分工
 - **標準化抓取（決定性腳本）**：`src/build_dataset.py` → `data/2344_YYYYMMDD.json`
@@ -11,7 +11,7 @@
 - **交付**：`src/send_email.py` 寄報告給 `MAIL_TO`
 - **排程**：`src/run_daily.ps1`（依序跑抓取→分析→寄信）由 Windows 工作排程器於 06:00 觸發
 
-## 資料來源（六面）
+## 資料來源（九面）
 | 面向 | 來源 | 單位/備註 |
 |---|---|---|
 | 技術面 | Fugle Marketdata API（historical/candles → 本地算 MA/KD/RSI/MACD/乖離/量能） | 需 API 金鑰 |
@@ -20,6 +20,9 @@
 | 消息面 | CMoney 論壇/新聞內部 JSON API（Playwright 攔截） | 發布時間取自 createTime（精確毫秒），嚴格確認 |
 | 美光 (MU) | Yahoo Finance chart API | 隔夜收盤漲跌%；免金鑰 |
 | 費半 (SOX) | Yahoo Finance chart API（^SOX） | 隔夜收盤漲跌%；免金鑰 |
+| 日內 1 分 K | Fugle Marketdata API（intraday/candles，前一日盤中） | 僅保留近期，須每日累積 |
+| 主力分點 | 富邦 DJ 個股主力進出（券商分點買賣超） | 單位：張；僅最新一日，須每日累積 |
+| TDCC 千張大戶 | 集保戶股權分散表：OpenData CSV（當週）＋ smart.tdcc 查詢（歷史逐週） | 週頻、占比%；公布有 lag |
 
 > 記憶體族群與美光/費半高度正相關，隔夜美股常主導 2344 當日方向，為重要外生特徵。
 
@@ -73,6 +76,7 @@ python -c "import sys; sys.path.insert(0,'src'); import send_email; send_email._
 ### B-2 回補歷史 + 重算權重（＝ `backfill_history.bat`，以「當前已校準參數」重算）
 ```powershell
 python src\ingest.py --backfill-chips                            # 回補歷史籌碼（逐日抓 TWSE 較慢；省略日期=自動取全區間）
+python src\ingest.py --backfill-tdcc                             # 第九面 TDCC 千張大戶（smart.tdcc 逐週，約近一年）
 python src\backtest.py --start 2025-07-01 [--end 2026-06-23]     # 回測 -> data\weights.json + reports\backtest_*.md
 python src\validate_news.py --start 2025-07-01                   # 驗證消息型態極性 -> data\news_patterns.json
 python src\oos_check.py --start 2025-07-01                       # 樣本外複核（OOS 應 >= baseline ~47%）
