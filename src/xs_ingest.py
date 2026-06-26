@@ -9,6 +9,7 @@
 用法：
     python src/xs_ingest.py --backfill 2026-01-01 2026-06-24
     python src/xs_ingest.py --backfill            # 預設近約一季
+    python src/xs_ingest.py --backfill 2025-07-01 2026-06-24 --all   # 全市場普通股（大樣本 IC）
 """
 from __future__ import annotations
 
@@ -35,7 +36,17 @@ def _col_idx(fields: list, *needles, exclude=()) -> int | None:
     return None
 
 
-def fetch_chips_allstock(date_ymd: str, want: set[str], warnings: list[str]) -> list[dict]:
+def _keep(sym: str, want: set[str] | None) -> bool:
+    """want 為 None -> 全市場普通股；否則只留 want 清單內。"""
+    return universe.is_common_stock(sym) if want is None else (sym in want)
+
+
+def _cell(row: list, idx: int | None):
+    """安全取欄（全市場資料偶有短列/彙總列，須防 IndexError）。"""
+    return row[idx] if idx is not None and idx < len(row) else None
+
+
+def fetch_chips_allstock(date_ymd: str, want: set[str] | None, warnings: list[str]) -> list[dict]:
     """T86 全市場三大法人 → 篩 want 股票池，回傳 [{symbol,date,foreign_net,total_net}]（張）。"""
     try:
         js = fetch_twse._get_json(f"{config.TWSE_RWD}/fund/T86",
@@ -49,16 +60,18 @@ def fetch_chips_allstock(date_ymd: str, want: set[str], warnings: list[str]) -> 
     d = date_ymd[:4] + "-" + date_ymd[4:6] + "-" + date_ymd[6:]
     out = []
     for r in js.get("data") or []:
+        if not r:
+            continue
         sym = str(r[0]).strip()
-        if sym not in want:
+        if not _keep(sym, want):
             continue
         out.append({"symbol": sym, "date": d,
-                    "foreign_net": _shares_to_lots(r[fi]) if fi is not None else None,
-                    "total_net": _shares_to_lots(r[ti]) if ti is not None else None})
+                    "foreign_net": _shares_to_lots(_cell(r, fi)),
+                    "total_net": _shares_to_lots(_cell(r, ti))})
     return out
 
 
-def fetch_closes_allstock(date_ymd: str, want: set[str], warnings: list[str]) -> list[dict]:
+def fetch_closes_allstock(date_ymd: str, want: set[str] | None, warnings: list[str]) -> list[dict]:
     """MI_INDEX 全市場收盤 → 篩 want，回傳 [{symbol,date,close,volume(張)}]。"""
     try:
         js = fetch_twse._get_json(f"{config.TWSE_RWD}/afterTrading/MI_INDEX",
@@ -76,18 +89,20 @@ def fetch_closes_allstock(date_ymd: str, want: set[str], warnings: list[str]) ->
             continue
         out = []
         for r in t.get("data") or []:
+            if not r or si >= len(r):
+                continue
             sym = str(r[si]).strip()
-            if sym not in want:
+            if not _keep(sym, want):
                 continue
             out.append({"symbol": sym, "date": d,
-                        "close": fetch_twse._flt(r[ci]),
-                        "volume": _shares_to_lots(r[vi]) if vi is not None else None})
+                        "close": fetch_twse._flt(_cell(r, ci)),
+                        "volume": _shares_to_lots(_cell(r, vi))})
         return out
     warnings.append(f"xs MI_INDEX {date_ymd}: 找不到收盤行情表")
     return []
 
 
-def fetch_tdcc_allstock(want: set[str], warnings: list[str]) -> list[dict]:
+def fetch_tdcc_allstock(want: set[str] | None, warnings: list[str]) -> list[dict]:
     """TDCC OpenData CSV（全市場最新週）→ 篩 want，回傳 [{symbol,data_date,big_pct}]。"""
     import csv
     import io
@@ -109,7 +124,7 @@ def fetch_tdcc_allstock(want: set[str], warnings: list[str]) -> list[dict]:
         if len(row) < 6:
             continue
         sym = row[1].strip()
-        if sym not in want:
+        if not _keep(sym, want):
             continue
         pct = fetch_tdcc._pct(row[5])
         if pct is not None:
@@ -122,8 +137,9 @@ def fetch_tdcc_allstock(want: set[str], warnings: list[str]) -> list[dict]:
     return out
 
 
-def backfill(start: str | None = None, end: str | None = None) -> dict:
-    want = set(universe.SYMBOLS)
+def backfill(start: str | None = None, end: str | None = None,
+             all_market: bool = False) -> dict:
+    want = None if all_market else set(universe.SYMBOLS)
     xs_db.init_db()
     warnings: list[str] = []
     # 交易日清單沿用 market.db 的 2344 日 K（只讀）
@@ -135,17 +151,24 @@ def backfill(start: str | None = None, end: str | None = None) -> dict:
     start = start or all_dates[max(0, len(all_dates) - 65)]  # 預設近約一季
     end = end or all_dates[-1]
     sel = [d for d in all_dates if start <= d <= end]
-    print(f"[xs_ingest] 股票池 {len(want)} 檔，交易日 {len(sel)}（{start}~{end}），逐日抓 TWSE 全市場（較慢）")
+    pool = "全市場普通股" if want is None else f"{len(want)} 檔"
+    print(f"[xs_ingest] 股票池 {pool}，交易日 {len(sel)}（{start}~{end}），逐日抓 TWSE 全市場（較慢）")
 
-    tot = {"candles": 0, "chips": 0, "tdcc": 0}
+    tot = {"candles": 0, "chips": 0, "tdcc": 0, "skip": 0}
     with xs_db.connect() as conn:
+        # 已同時有 candles 與 chips 的交易日 -> 跳過（重跑可續抓）
+        done = ({r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_candles")}
+                & {r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_chips")})
         for k, d in enumerate(sel, 1):
+            if d in done:
+                tot["skip"] += 1
+                continue
             ymd = d.replace("-", "")
             tot["candles"] += xs_db.upsert_candles(conn, fetch_closes_allstock(ymd, want, warnings))
             tot["chips"] += xs_db.upsert_chips(conn, fetch_chips_allstock(ymd, want, warnings))
             if k % 10 == 0:
                 conn.commit()
-                print(f"  ...{k}/{len(sel)}（{d}）candles+{tot['candles']} chips+{tot['chips']}")
+                print(f"  ...{k}/{len(sel)}（{d}）candles+{tot['candles']} chips+{tot['chips']} skip{tot['skip']}")
             time.sleep(0.3)
         tot["tdcc"] = xs_db.upsert_tdcc(conn, fetch_tdcc_allstock(want, warnings))
     print(f"[xs_ingest] 完成：candles {tot['candles']}、chips {tot['chips']}、tdcc {tot['tdcc']}")
@@ -159,7 +182,7 @@ def main(argv: list[str]) -> None:
         i = argv.index("--backfill")
         start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
         end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None
-        backfill(start, end)
+        backfill(start, end, all_market="--all" in argv)
     else:
         print(__doc__)
 

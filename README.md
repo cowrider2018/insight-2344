@@ -138,13 +138,19 @@ schtasks /Delete /TN "CMoney_2344_Daily" /F   # 刪除（或執行 schedule_dele
 籌碼因子有效性（而非單股命中率）。資料源用 TWSE 全市場單次端點（MI_INDEX 收盤、T86 三大法人）。
 
 ```powershell
-python src\xs_ingest.py --backfill 2026-01-01 2026-06-24   # 逐日抓全市場 -> 篩股票池 -> data\xs.db
-python src\xs_backtest.py --start 2026-01-01 --window 5 --q 5  # IC / 分位 / 多空 -> reports\xs_backtest_*.md
+# 全市場大樣本（一次抓全市場、存所有普通股；不增加抓取成本）
+python src\xs_ingest.py --backfill 2025-07-01 2026-06-24 --all      # -> data\xs.db（約 20 萬列/表）
+python src\xs_backtest.py --start 2025-07-01 --top 300 --window 5 --q 5   # 每日取量前 300 檔 -> reports\xs_backtest_*.md
+# 小而精策展清單（~25 檔）
+python src\xs_ingest.py --backfill 2026-01-01 2026-06-24
+python src\xs_backtest.py --start 2026-01-01 --window 5 --q 5
 ```
 
 - **訊號**：三大法人淨額 / 成交量（跨股籌碼流入強度），訊號日 D 盤後可得、預測 **D→D+1**（無 look-ahead）。
 - **指標**：平均 IC（Spearman）、IC_IR、IC>0 比例、分位平均報酬、多空（top−bottom）累積報酬。
-- **股票池**：`src/universe.py`（預設 ~25 檔記憶體/半導體同儕，可增減）。
-- MVP 定位：建立框架並量化因子；真正威力需擴大股票池（數百檔）與更長區間、加入大戶週變化等多因子。
+- **股票池**：`src/universe.py` 策展 ~25 檔；或 `--all` 全市場普通股（4 位數、排除 ETF/權證），回測以 `--top N` 每日取流動性前 N 檔。
+- **大樣本實測（全市場、每日前 300 檔、2025-07~2026-06、237 日）**：平均 IC 0.013、IC>0 占 **58.7%** 日、
+  多空累積 **+31.4%**（毛、無成本）、分位呈高訊號→高報酬傾向。**方向一致為正**（與小樣本 MVP 的負值相反），
+  支持「跨股籌碼 alpha 在規模下浮現」之假設；惟單因子 IC 偏弱（<0.03）、未計交易成本，淨值可行性待驗證。
 
 > 06:00 台股未開盤，採前一交易日收盤定數＋隔夜美股/消息，產出盤前走勢研判。本專案為資訊彙整與分析，非投資建議，據此操作風險自負。

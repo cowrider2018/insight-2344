@@ -1,9 +1,21 @@
 """橫斷面多股排序（選項 D）的股票池。
 
-預設取記憶體/半導體/IC 設計/封測/伺服器等「同產業可比」上市股，供跨股籌碼排序與
-IC / 多空回測使用。此為 MVP 預設清單，可自行增減（純資料，無耦合）。
+兩種模式：
+- 預設策展清單 UNIVERSE：記憶體/半導體/IC 設計/封測/伺服器等同產業可比股（小而精）。
+- 全市場模式（`is_common_stock`）：4 位數普通股（排除 ETF 00xx、權證等），供大樣本跨股 IC。
+  因 TWSE MI_INDEX/T86 一次回傳全市場，全市場模式不增加抓取成本，只多存資料列。
+回測再以每日成交量取「流動性前 N 檔」形成乾淨橫斷面。純資料，無耦合。
 """
 from __future__ import annotations
+
+import re
+
+# 普通股：4 位數且不以 0 開頭（排除 00xx ETF、5-6 位權證/受益證券）
+_COMMON_RE = re.compile(r"^[1-9]\d{3}$")
+
+
+def is_common_stock(symbol: str) -> bool:
+    return bool(_COMMON_RE.match(str(symbol).strip()))
 
 # {代號: 名稱}（名稱僅供報告閱讀，計算只用代號）
 UNIVERSE: dict[str, str] = {

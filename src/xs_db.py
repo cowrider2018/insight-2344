@@ -89,11 +89,12 @@ def upsert_tdcc(conn: sqlite3.Connection, rows: Iterable[dict]) -> int:
     return n
 
 
-def load_panel(conn: sqlite3.Connection) -> tuple[dict, dict, list[str]]:
-    """回傳 (closes, flows, dates)。
+def load_panel(conn: sqlite3.Connection) -> tuple[dict, dict, dict, list[str]]:
+    """回傳 (closes, flows, vols, dates)。
 
     closes[symbol][date] = 收盤價；
     flows[symbol][date]  = 三大法人淨額/成交量（張/張，跨股可比的籌碼流入強度）；
+    vols[symbol][date]   = 成交張數（供回測做每日流動性篩選）；
     dates = 有任一收盤的交易日（由舊到新）。
     """
     closes: dict[str, dict[str, float]] = {}
@@ -113,7 +114,7 @@ def load_panel(conn: sqlite3.Connection) -> tuple[dict, dict, list[str]]:
         if net is None or not v:
             continue
         flows.setdefault(r["symbol"], {})[r["date"]] = net / v
-    return closes, flows, sorted(date_set)
+    return closes, flows, vols, sorted(date_set)
 
 
 def counts(conn: sqlite3.Connection) -> dict:

@@ -7,14 +7,14 @@
 輸出 reports/xs_backtest_<start>_<end>.md。
 
 用法：
-    python src/xs_backtest.py [--start 2026-01-01] [--end 2026-06-24] [--window 5] [--q 5]
+    python src/xs_backtest.py [--start 2026-01-01] [--end 2026-06-24] [--window 5] [--q 5] [--top 300]
+    --top N：每日只取成交量前 N 檔形成流動性橫斷面（0=全部，全市場模式建議 200~300）。
 """
 from __future__ import annotations
 
 import sys
 
 import config
-import universe
 import xs_db
 import xs_signals as xs
 
@@ -30,9 +30,9 @@ def _std(v: list[float]) -> float:
     return (sum((x - m) ** 2 for x in v) / (len(v) - 1)) ** 0.5
 
 
-def run(start: str | None, end: str | None, window: int, q: int) -> dict:
+def run(start: str | None, end: str | None, window: int, q: int, top: int = 0) -> dict:
     with xs_db.connect() as conn:
-        closes, flows, dates = xs_db.load_panel(conn)
+        closes, flows, vols, dates = xs_db.load_panel(conn)
     if len(dates) < 5:
         return {"error": "xs.db 樣本不足，請先 python src/xs_ingest.py --backfill"}
     if start:
@@ -40,26 +40,32 @@ def run(start: str | None, end: str | None, window: int, q: int) -> dict:
     if end:
         dates = [d for d in dates if d <= end]
     sig = xs.smoothed_flow(flows, dates, window)
+    syms_all = list(sig.keys())
 
     ics: list[float] = []
     ls_rets: list[float] = []          # 多空（top−bottom 分位）每日報酬
     qmeans: dict[int, list[float]] = {g: [] for g in range(q)}
+    xs_sizes: list[int] = []           # 每日橫斷面檔數
     n_eval = 0
     for i in range(len(dates) - 1):
         d, dn = dates[i], dates[i + 1]
         assert d < dn, "look-ahead: 前向日序不單調"
         # 當日有訊號、且當日與次日皆有收盤的股票
         rows = []
-        for s in universe.SYMBOLS:
+        for s in syms_all:
             sv = sig.get(s, {}).get(d)
             c0 = closes.get(s, {}).get(d)
             c1 = closes.get(s, {}).get(dn)
             if sv is None or not c0 or c1 is None:
                 continue
-            rows.append((s, sv, c1 / c0 - 1.0))
+            rows.append((s, sv, c1 / c0 - 1.0, vols.get(s, {}).get(d) or 0.0))
+        # 每日流動性篩選：取成交量前 top 檔（0=不篩）
+        if top and len(rows) > top:
+            rows = sorted(rows, key=lambda r: r[3], reverse=True)[:top]
         if len(rows) < 5:
             continue
         n_eval += 1
+        xs_sizes.append(len(rows))
         ic = xs.spearman([r[1] for r in rows], [r[2] for r in rows])
         if ic is not None:
             ics.append(ic)
@@ -68,10 +74,10 @@ def run(start: str | None, end: str | None, window: int, q: int) -> dict:
         for g, syms in groups.items():
             if syms:
                 qmeans[g].append(_mean([ret_by_sym[s] for s in syms]))
-        top = [ret_by_sym[s] for s in groups[q - 1]]
+        top_g = [ret_by_sym[s] for s in groups[q - 1]]
         bot = [ret_by_sym[s] for s in groups[0]]
-        if top and bot:
-            ls_rets.append(_mean(top) - _mean(bot))
+        if top_g and bot:
+            ls_rets.append(_mean(top_g) - _mean(bot))
 
     mean_ic = _mean(ics)
     ic_ir = mean_ic / _std(ics) if _std(ics) else 0.0
@@ -81,7 +87,9 @@ def run(start: str | None, end: str | None, window: int, q: int) -> dict:
     for r in ls_rets:
         ls_cum *= (1.0 + r)
     return {
-        "n_days": n_eval, "universe": len(universe.SYMBOLS), "window": window, "q": q,
+        "n_days": n_eval, "universe": len(syms_all), "top": top,
+        "avg_xs_size": round(_mean([float(x) for x in xs_sizes]), 1),
+        "window": window, "q": q,
         "mean_ic": mean_ic, "ic_ir": ic_ir, "pos_ic_ratio": pos_ic, "n_ic": len(ics),
         "ls_mean_daily": ls_mean, "ls_cumulative": ls_cum - 1.0,
         "quantile_mean_daily": {g: _mean(v) for g, v in qmeans.items()},
@@ -97,8 +105,8 @@ def write_report(res: dict, path) -> None:
     lines = [
         f"# 橫斷面多股籌碼排序回測（{res['range'][0]} ~ {res['range'][1]}）",
         "",
-        f"- 股票池：**{res['universe']}** 檔　評估交易日：**{res['n_days']}**　"
-        f"訊號平滑：{res['window']} 日　分位數：{q}",
+        f"- 股票池：**{res['universe']}** 檔（每日流動性前 {res['top'] or '全部'} 檔、平均橫斷面 "
+        f"{res['avg_xs_size']} 檔）　評估交易日：**{res['n_days']}**　訊號平滑：{res['window']} 日　分位數：{q}",
         "- 訊號：三大法人淨額 / 成交量（跨股籌碼流入強度），預測次日報酬（無 look-ahead）。",
         "",
         "## 資訊係數（IC，Spearman）",
@@ -135,8 +143,9 @@ def main(argv: list[str]) -> None:
     end = opt("--end")
     window = int(opt("--window", "5"))
     q = int(opt("--q", "5"))
+    top = int(opt("--top", "0"))
 
-    res = run(start, end, window, q)
+    res = run(start, end, window, q, top)
     if res.get("error"):
         print("[xs_backtest]", res["error"])
         return
