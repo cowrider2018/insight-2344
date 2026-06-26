@@ -1,14 +1,18 @@
-"""橫斷面多股籌碼排序回測（選項 D，MVP）。
+"""橫斷面多股籌碼排序回測（選項 D）。
 
 評估「跨股以籌碼訊號排名」是否有 alpha——以 cross-sectional **IC（資訊係數）**、
-**分位數報酬** 與 **多空（top−bottom 分位）** 衡量，而非單股命中率。
+**分位數報酬**、**多空（top−bottom）** 衡量，並做**交易成本／週轉（持有期）敏感度**與
+**分期穩健**檢驗（決定弱訊號是否真能交易、是否為單一 regime 運氣）。
 
 無 look-ahead：訊號 sig(D) 由三大法人淨額（D 盤後公布）算，預測 **D→D+1** 報酬。
 輸出 reports/xs_backtest_<start>_<end>.md。
 
 用法：
-    python src/xs_backtest.py [--start 2026-01-01] [--end 2026-06-24] [--window 5] [--q 5] [--top 300]
-    --top N：每日只取成交量前 N 檔形成流動性橫斷面（0=全部，全市場模式建議 200~300）。
+    python src/xs_backtest.py [--start ..] [--end ..] [--window 5] [--q 5] [--top 300]
+                              [--cost 0.45] [--holds 1,5,10,20] [--subperiods 4]
+    --top N：每日只取成交量前 N 檔形成流動性橫斷面（0=全部，全市場建議 200~300）。
+    --cost：每單位「名單週轉」的來回成本%（預設 0.45，約台股稅費折後 + 借券概估）。
+    --holds：持有期（每幾日換倉）清單，用來看降週轉後淨報酬。
 """
 from __future__ import annotations
 
@@ -30,27 +34,55 @@ def _std(v: list[float]) -> float:
     return (sum((x - m) ** 2 for x in v) / (len(v) - 1)) ** 0.5
 
 
-def run(start: str | None, end: str | None, window: int, q: int, top: int = 0) -> dict:
+def _prep(start, end, window):
+    """載入 xs.db 面板一次，回傳 (dates, sig, closes, vols)；不足回 None。"""
     with xs_db.connect() as conn:
         closes, flows, vols, dates = xs_db.load_panel(conn)
-    if len(dates) < 5:
-        return {"error": "xs.db 樣本不足，請先 python src/xs_ingest.py --backfill"}
     if start:
         dates = [d for d in dates if d >= start]
     if end:
         dates = [d for d in dates if d <= end]
-    sig = xs.smoothed_flow(flows, dates, window)
-    syms_all = list(sig.keys())
+    if len(dates) < 10:
+        return None
+    return dates, xs.smoothed_flow(flows, dates, window), closes, vols
 
-    ics: list[float] = []
-    ls_rets: list[float] = []          # 多空（top−bottom 分位）每日報酬
-    qmeans: dict[int, list[float]] = {g: [] for g in range(q)}
-    xs_sizes: list[int] = []           # 每日橫斷面檔數
-    n_eval = 0
+
+def _form_baskets(d, sig, closes, vols, q, top):
+    """以 signal(d) 在流動性前 top 檔中分位，回傳 (top 分位 set, bottom 分位 set)。"""
+    rows = []
+    for s in sig:
+        sv = sig.get(s, {}).get(d)
+        c0 = closes.get(s, {}).get(d)
+        if sv is None or not c0:
+            continue
+        rows.append((s, sv, vols.get(s, {}).get(d) or 0.0))
+    if top and len(rows) > top:
+        rows = sorted(rows, key=lambda r: r[2], reverse=True)[:top]
+    if len(rows) < 5:
+        return None, None
+    g = xs.quantile_groups([(r[0], r[1]) for r in rows], q)
+    return set(g[q - 1]), set(g[0])
+
+
+def _leg_ret(names, closes, d, dn):
+    rs = []
+    for s in names:
+        c0 = closes.get(s, {}).get(d)
+        c1 = closes.get(s, {}).get(dn)
+        if c0 and c1 is not None:
+            rs.append(c1 / c0 - 1.0)
+    return _mean(rs) if rs else 0.0
+
+
+def run(dates, sig, closes, vols, q, top):
+    """每日換倉的 IC / 分位 / 多空（毛）。回傳 (stats, daily)；daily 供分期分析。"""
+    syms_all = list(sig.keys())
+    daily = []                          # 每日 {date, ic, ls}
+    qmeans = {g: [] for g in range(q)}
+    xs_sizes = []
     for i in range(len(dates) - 1):
         d, dn = dates[i], dates[i + 1]
         assert d < dn, "look-ahead: 前向日序不單調"
-        # 當日有訊號、且當日與次日皆有收盤的股票
         rows = []
         for s in syms_all:
             sv = sig.get(s, {}).get(d)
@@ -59,76 +91,135 @@ def run(start: str | None, end: str | None, window: int, q: int, top: int = 0) -
             if sv is None or not c0 or c1 is None:
                 continue
             rows.append((s, sv, c1 / c0 - 1.0, vols.get(s, {}).get(d) or 0.0))
-        # 每日流動性篩選：取成交量前 top 檔（0=不篩）
         if top and len(rows) > top:
             rows = sorted(rows, key=lambda r: r[3], reverse=True)[:top]
         if len(rows) < 5:
             continue
-        n_eval += 1
         xs_sizes.append(len(rows))
         ic = xs.spearman([r[1] for r in rows], [r[2] for r in rows])
-        if ic is not None:
-            ics.append(ic)
         groups = xs.quantile_groups([(r[0], r[1]) for r in rows], q)
         ret_by_sym = {r[0]: r[2] for r in rows}
         for g, syms in groups.items():
             if syms:
                 qmeans[g].append(_mean([ret_by_sym[s] for s in syms]))
-        top_g = [ret_by_sym[s] for s in groups[q - 1]]
-        bot = [ret_by_sym[s] for s in groups[0]]
-        if top_g and bot:
-            ls_rets.append(_mean(top_g) - _mean(bot))
+        ls = _mean([ret_by_sym[s] for s in groups[q - 1]]) - _mean([ret_by_sym[s] for s in groups[0]])
+        daily.append({"date": d, "ic": ic, "ls": ls})
 
-    mean_ic = _mean(ics)
-    ic_ir = mean_ic / _std(ics) if _std(ics) else 0.0
-    pos_ic = sum(1 for x in ics if x > 0) / len(ics) if ics else 0.0
-    ls_mean = _mean(ls_rets)
+    ics = [x["ic"] for x in daily if x["ic"] is not None]
+    ls_rets = [x["ls"] for x in daily]
     ls_cum = 1.0
     for r in ls_rets:
         ls_cum *= (1.0 + r)
-    return {
-        "n_days": n_eval, "universe": len(syms_all), "top": top,
-        "avg_xs_size": round(_mean([float(x) for x in xs_sizes]), 1),
-        "window": window, "q": q,
-        "mean_ic": mean_ic, "ic_ir": ic_ir, "pos_ic_ratio": pos_ic, "n_ic": len(ics),
-        "ls_mean_daily": ls_mean, "ls_cumulative": ls_cum - 1.0,
+    stats = {
+        "n_days": len(daily), "universe": len(syms_all), "top": top,
+        "avg_xs_size": round(_mean([float(x) for x in xs_sizes]), 1), "q": q,
+        "mean_ic": _mean(ics), "ic_ir": _mean(ics) / _std(ics) if _std(ics) else 0.0,
+        "pos_ic_ratio": sum(1 for x in ics if x > 0) / len(ics) if ics else 0.0, "n_ic": len(ics),
+        "ls_mean_daily": _mean(ls_rets), "ls_cumulative": ls_cum - 1.0,
         "quantile_mean_daily": {g: _mean(v) for g, v in qmeans.items()},
-        "range": [dates[0], dates[-1]] if dates else [None, None],
+        "range": [dates[0], dates[-1]],
     }
+    return stats, daily
 
 
-def write_report(res: dict, path) -> None:
-    if res.get("error"):
-        path.write_text(res["error"], encoding="utf-8")
-        return
+def cost_sweep(dates, sig, closes, vols, q, top, holds, cost):
+    """不同持有期（每幾日換倉）下的毛/淨累積與週轉。cost=每單位名單週轉的來回成本%。"""
+    out = []
+    for hold in holds:
+        L = S = None
+        gross = net = 1.0
+        tos = []
+        ndays = 0
+        for i in range(len(dates) - 1):
+            d, dn = dates[i], dates[i + 1]
+            cost_today = 0.0
+            if i % hold == 0:
+                nl, ns = _form_baskets(d, sig, closes, vols, q, top)
+                if nl is not None:
+                    to = 1.0 if L is None else (len(nl - L) + len(ns - S)) / (len(nl) + len(ns))
+                    tos.append(to)
+                    cost_today = to * cost / 100.0
+                    L, S = nl, ns
+            if L is None:
+                continue
+            ls = _leg_ret(L, closes, d, dn) - _leg_ret(S, closes, d, dn)
+            gross *= (1.0 + ls)
+            net *= (1.0 + ls - cost_today)
+            ndays += 1
+        ann = net ** (252.0 / ndays) - 1.0 if ndays else 0.0
+        out.append({"hold": hold, "gross_cum": gross - 1.0, "net_cum": net - 1.0,
+                    "ann_net": ann, "avg_turnover": _mean(tos), "n_rebal": len(tos)})
+    return out
+
+
+def subperiods(daily, k):
+    """把評估日等分 k 段，各段平均 IC 與多空毛累積（看是否單一 regime 運氣）。"""
+    n = len(daily)
+    out = []
+    for j in range(k):
+        chunk = daily[j * n // k:(j + 1) * n // k]
+        if not chunk:
+            continue
+        ics = [x["ic"] for x in chunk if x["ic"] is not None]
+        cum = 1.0
+        for x in chunk:
+            cum *= (1.0 + x["ls"])
+        out.append({"label": f"{chunk[0]['date']}~{chunk[-1]['date']}", "n": len(chunk),
+                    "mean_ic": _mean(ics), "ls_cum": cum - 1.0})
+    return out
+
+
+def write_report(res, daily, costs, subs, cost, path) -> None:
     q = res["q"]
     lines = [
         f"# 橫斷面多股籌碼排序回測（{res['range'][0]} ~ {res['range'][1]}）",
         "",
         f"- 股票池：**{res['universe']}** 檔（每日流動性前 {res['top'] or '全部'} 檔、平均橫斷面 "
-        f"{res['avg_xs_size']} 檔）　評估交易日：**{res['n_days']}**　訊號平滑：{res['window']} 日　分位數：{q}",
+        f"{res['avg_xs_size']} 檔）　評估交易日：**{res['n_days']}**　分位數：{q}",
         "- 訊號：三大法人淨額 / 成交量（跨股籌碼流入強度），預測次日報酬（無 look-ahead）。",
         "",
         "## 資訊係數（IC，Spearman）",
-        f"- 平均 IC：**{res['mean_ic']:.4f}**　IC_IR（平均/標準差）：**{res['ic_ir']:.3f}**　"
+        f"- 平均 IC：**{res['mean_ic']:.4f}**　IC_IR：**{res['ic_ir']:.3f}**　"
         f"IC>0 比例：{res['pos_ic_ratio']:.2%}（n={res['n_ic']}）",
-        "> 經驗參考：|平均 IC|≥0.03、IC_IR≥0.3 即視為有實質跨股預測力（單因子）。",
+        "> 經驗參考：|平均 IC|≥0.03、IC_IR≥0.3 才算有實質跨股預測力（單因子）。",
         "",
-        "## 多空組合（top − bottom 分位，等權、每日換倉、無成本假設）",
-        f"- 平均每日報酬：**{res['ls_mean_daily']:.4%}**　區間累積：**{res['ls_cumulative']:.2%}**",
+        "## 多空（top−bottom，等權、每日換倉、**毛**、無成本）",
+        f"- 平均每日：**{res['ls_mean_daily']:.4%}**　區間累積：**{res['ls_cumulative']:.2%}**",
         "",
         "## 各分位平均每日報酬（0=最低訊號 → 高=最高訊號）",
-        "| 分位 | 平均每日報酬 |",
-        "|---|---|",
+        "| 分位 | 平均每日報酬 |", "|---|---|",
     ]
     for g in range(q):
         lines.append(f"| Q{g} | {res['quantile_mean_daily'].get(g, 0):.4%} |")
+
+    lines += [
+        "",
+        f"## 交易成本與週轉敏感度（成本假設：每單位名單週轉來回 {cost:.2f}%）",
+        "> **關卡一**：弱訊號能否扛成本。每日換倉週轉極高、成本最重；拉長持有期（降週轉）才有機會轉正。",
+        "| 持有期(日) | 換倉次數 | 平均週轉 | 毛累積 | **淨累積** | 年化淨 |",
+        "|---|---|---|---|---|---|",
+    ]
+    for c in costs:
+        lines.append(f"| {c['hold']} | {c['n_rebal']} | {c['avg_turnover']:.2%} | "
+                     f"{c['gross_cum']:.2%} | **{c['net_cum']:.2%}** | {c['ann_net']:.2%} |")
+
+    lines += [
+        "",
+        "## 分期穩健（等分區間的平均 IC 與多空毛累積）",
+        "> **關卡二**：edge 是否集中在某段（regime 運氣）。各段方向一致才可信。",
+        "| 期間 | 日數 | 平均 IC | 多空毛累積 |", "|---|---|---|---|",
+    ]
+    for s in subs:
+        lines.append(f"| {s['label']} | {s['n']} | {s['mean_ic']:.4f} | {s['ls_cum']:.2%} |")
+
     lines += [
         "",
         "## 注意與限制",
-        "- 評估指標為橫斷面 IC / 分位報酬 / 多空，**非單股命中率**；正 IC 表示高籌碼流入股次日相對較強。",
-        "- 無交易成本/滑價/流動性假設，多空為理論等權每日換倉，僅供因子有效性評估。",
-        "- 股票池與訊號為 MVP；可擴大股票池、加入 TDCC 大戶週變化等多因子做更完整評估。",
+        "- 評估指標為橫斷面 IC / 分位 / 多空，**非單股命中率**；正 IC=高籌碼流入股次日相對較強。",
+        "- 成本模型為簡化估計（每單位名單週轉一個來回固定成本），未含滑價、借券限制、衝擊成本與當沖/平盤限制；"
+        "**淨累積為負或接近 0 即代表此單因子在該成本下不可交易**。",
+        "- 多空為理論等權，放空在台股有借券成本與限制；保守應另看**純做多 top 分位 vs 大盤**。",
+        "- 單因子且區間有限；可加 TDCC 大戶週變化等多因子、延長區間以強化結論。",
         "",
         "本報告為公開資訊回測，非投資建議，據此操作風險自負。",
     ]
@@ -139,21 +230,30 @@ def main(argv: list[str]) -> None:
     def opt(flag, default=None):
         return argv[argv.index(flag) + 1] if flag in argv else default
 
-    start = opt("--start")
-    end = opt("--end")
-    window = int(opt("--window", "5"))
-    q = int(opt("--q", "5"))
-    top = int(opt("--top", "0"))
+    start, end = opt("--start"), opt("--end")
+    window, q, top = int(opt("--window", "5")), int(opt("--q", "5")), int(opt("--top", "0"))
+    cost = float(opt("--cost", "0.45"))
+    holds = [int(x) for x in opt("--holds", "1,5,10,20").split(",")]
+    k = int(opt("--subperiods", "4"))
 
-    res = run(start, end, window, q, top)
-    if res.get("error"):
-        print("[xs_backtest]", res["error"])
+    prep = _prep(start, end, window)
+    if prep is None:
+        print("[xs_backtest] xs.db 樣本不足，請先 python src/xs_ingest.py --backfill")
         return
+    dates, sig, closes, vols = prep
+    res, daily = run(dates, sig, closes, vols, q, top)
+    costs = cost_sweep(dates, sig, closes, vols, q, top, holds, cost)
+    subs = subperiods(daily, k)
+
     path = config.REPORTS_DIR / f"xs_backtest_{res['range'][0]}_{res['range'][1]}.md"
-    write_report(res, path)
-    print(f"[xs_backtest] 股票池 {res['universe']} 檔、評估 {res['n_days']} 日")
+    write_report(res, daily, costs, subs, cost, path)
+    print(f"[xs_backtest] 股票池 {res['universe']} 檔、評估 {res['n_days']} 日、每日前 {top or '全部'} 檔")
     print(f"  平均 IC {res['mean_ic']:.4f}　IC_IR {res['ic_ir']:.3f}　IC>0 {res['pos_ic_ratio']:.2%}")
-    print(f"  多空 平均日報酬 {res['ls_mean_daily']:.4%}　累積 {res['ls_cumulative']:.2%}")
+    print(f"  多空毛 平均日 {res['ls_mean_daily']:.4%}　累積 {res['ls_cumulative']:.2%}")
+    print(f"  成本{cost:.2f}% 下淨累積：" + "　".join(
+        f"持{c['hold']}日 {c['net_cum']:.1%}(週轉{c['avg_turnover']:.0%})" for c in costs))
+    print("  分期毛累積：" + "　".join(f"{s['label'][:7]}… IC{s['mean_ic']:.3f}/{s['ls_cum']:.0%}"
+                                       for s in subs))
     print(f"  -> {path}")
 
 
