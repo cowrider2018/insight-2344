@@ -132,6 +132,17 @@ def load_foreign_flows(conn: sqlite3.Connection) -> dict:
     return ff
 
 
+def load_tdcc_series(conn: sqlite3.Connection) -> dict:
+    """回傳 {symbol: [(data_date, big_pct), ...]}（依週日期升冪），供大戶週變化因子。"""
+    per: dict[str, list] = {}
+    for r in conn.execute(
+        "SELECT symbol, data_date, big_pct FROM xs_tdcc WHERE big_pct IS NOT NULL "
+        "ORDER BY symbol, data_date"
+    ):
+        per.setdefault(r["symbol"], []).append((r["data_date"], r["big_pct"]))
+    return per
+
+
 def counts(conn: sqlite3.Connection) -> dict:
     return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             for t in ("xs_candles", "xs_chips", "xs_tdcc")}

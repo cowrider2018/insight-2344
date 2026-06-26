@@ -85,6 +85,30 @@ def composite(factor_sigs: list[dict], dates: list[str]) -> dict:
     return out
 
 
+def _add_days(d_iso: str, days: int) -> str:
+    from datetime import date, timedelta
+    y, m, dd = (int(x) for x in d_iso.split("-"))
+    return (date(y, m, dd) + timedelta(days=days)).isoformat()
+
+
+def tdcc_change_factor(series: dict, trading_dates: list[str], lag_days: int = 7) -> dict:
+    """TDCC 千張大戶週變化因子（結構性、慢）。
+
+    series：{symbol: [(data_date, big_pct)...升冪]}。對每個交易日取「公布日(avail=data_date+lag)<該日」
+    的最新與前一週 big_pct 之差（百分點）。**以公布日比較，無 look-ahead**。回傳 {symbol:{date:chg}}。
+    """
+    out: dict[str, dict[str, float]] = {}
+    for sym, ser in series.items():
+        if len(ser) < 2:
+            continue
+        avail = [(_add_days(dd, lag_days), bp) for dd, bp in ser]  # 依 data_date 升冪 -> avail 亦升冪
+        for td in trading_dates:
+            elig = [bp for ad, bp in avail if ad < td]
+            if len(elig) >= 2:
+                out.setdefault(sym, {})[td] = elig[-1] - elig[-2]
+    return out
+
+
 def smoothed_flow(flows: dict, dates: list[str], window: int = 5) -> dict:
     """對每檔股票的 flow 序列做 window 日移動平均（含當日，僅用過去資料，無 look-ahead）。
 

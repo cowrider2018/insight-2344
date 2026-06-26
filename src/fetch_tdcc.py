@@ -176,27 +176,76 @@ def available_dates(warnings: list[str]) -> list[str]:
     return out
 
 
+def _post_query(session: requests.Session, token: str | None, fir: str,
+                symbol: str, date_yyyymmdd: str) -> tuple[str, str | None]:
+    """POST 一筆 (symbol, date)，回傳 (html, 新 token)。"""
+    r = session.post(
+        SMART_URL,
+        data={"SYNCHRONIZER_TOKEN": token or "",
+              "SYNCHRONIZER_URI": "/portal/zh/smWeb/qryStock",
+              "method": "submit", "firDate": fir,
+              "scaDate": date_yyyymmdd, "sqlMethod": "StockNo",
+              "stockNo": symbol, "stockName": ""},
+        timeout=30, verify=False,
+    )
+    r.raise_for_status()
+    nt = _TOKEN_RE.search(r.text)
+    return r.text, (nt.group(1) if nt else None)
+
+
 def fetch_history(date_yyyymmdd: str, warnings: list[str],
-                  session: requests.Session | None = None) -> dict | None:
-    """POST 查詢頁取單一資料日（YYYYMMDD）的 SYMBOL 分散表（synchronizer-token 流程）。"""
+                  session: requests.Session | None = None,
+                  symbol: str | None = None) -> dict | None:
+    """POST 查詢頁取單一資料日（YYYYMMDD）某股票分散表（synchronizer-token 流程）。"""
+    sym = symbol or config.SYMBOL
     try:
         s = session or requests.Session()
         s.headers.update({"User-Agent": config.USER_AGENT})
         token, fir, _ = _form_state(s)
-        r = s.post(
-            SMART_URL,
-            data={"SYNCHRONIZER_TOKEN": token or "",
-                  "SYNCHRONIZER_URI": "/portal/zh/smWeb/qryStock",
-                  "method": "submit", "firDate": fir,
-                  "scaDate": date_yyyymmdd, "sqlMethod": "StockNo",
-                  "stockNo": config.SYMBOL, "stockName": ""},
-            timeout=30, verify=False,
-        )
-        r.raise_for_status()
+        html, _ = _post_query(s, token, fir, sym, date_yyyymmdd)
     except requests.RequestException as e:
-        warnings.append(f"tdcc smart 抓取失敗 {date_yyyymmdd}: {e}")
+        warnings.append(f"tdcc smart 抓取失敗 {sym} {date_yyyymmdd}: {e}")
         return None
-    return _parse_smart_table(r.text, _norm_date(date_yyyymmdd), warnings)
+    return _parse_smart_table(html, _norm_date(date_yyyymmdd), warnings)
+
+
+def fetch_big_pct_history(symbols: list[str], dates: list[str], warnings: list[str],
+                          throttle: float = 0.2) -> list[dict]:
+    """批次回補多檔多週大戶占比 → [{symbol, data_date, big_pct}]。
+
+    單一 session（共用 cookie）；每檔先 GET 取 token，逐週 POST 並沿用回應中的新 token（synchronizer
+    一次性，須輪替）；逐週 parse 不灌 warning（缺資料屬正常）。失敗則重取 token。dates 為 YYYYMMDD。
+    """
+    import time
+
+    out: list[dict] = []
+    s = requests.Session()
+    s.headers.update({"User-Agent": config.USER_AGENT})
+    for si, sym in enumerate(symbols, 1):
+        try:
+            token, fir, _ = _form_state(s)
+        except requests.RequestException as e:
+            warnings.append(f"tdcc form {sym}: {e}")
+            continue
+        got = 0
+        for d in dates:
+            try:
+                html, nt = _post_query(s, token, fir, sym, d)
+                if nt:
+                    token = nt
+            except requests.RequestException:
+                try:
+                    token, fir, _ = _form_state(s)  # 重取 token 續抓
+                except requests.RequestException:
+                    pass
+                continue
+            res = _parse_smart_table(html, _norm_date(d), [])  # 不灌 warning
+            if res and res.get("big_pct") is not None:
+                out.append({"symbol": sym, "data_date": res["data_date"], "big_pct": res["big_pct"]})
+                got += 1
+            time.sleep(throttle)
+        print(f"  [tdcc-hist] {si}/{len(symbols)} {sym}: {got} 週")
+    return out
 
 
 def fetch_holders(date: str | None = None, warnings: list[str] | None = None) -> dict | None:

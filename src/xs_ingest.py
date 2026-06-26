@@ -177,8 +177,41 @@ def backfill(start: str | None = None, end: str | None = None,
     return tot
 
 
+def backfill_tdcc_history(start: str | None = None, end: str | None = None) -> int:
+    """聚焦池（universe.SYMBOLS）逐檔逐週回補 TDCC 大戶占比歷史 → xs.db.xs_tdcc。
+
+    全市場逐檔歷史不可廉價回補，故只對策展 ~50 檔做（真大戶週變化因子用）。
+    """
+    import fetch_tdcc
+    xs_db.init_db()
+    warnings: list[str] = []
+    weeks = fetch_tdcc.available_dates(warnings)  # YYYYMMDD 新到舊
+    if not weeks:
+        print(f"[tdcc-hist] 無可用週；warnings: {warnings}")
+        return 0
+
+    def _iso(d):
+        return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+
+    weeks = [w for w in weeks if (not start or _iso(w) >= start) and (not end or _iso(w) <= end)]
+    syms = list(universe.SYMBOLS)
+    print(f"[tdcc-hist] 聚焦 {len(syms)} 檔 × {len(weeks)} 週，逐檔逐週查 smart.tdcc（較慢，約 20+ 分）")
+    rows = fetch_tdcc.fetch_big_pct_history(syms, weeks, warnings)
+    with xs_db.connect() as conn:
+        n = xs_db.upsert_tdcc(conn, rows)
+    print(f"[tdcc-hist] upsert {n} 筆（{len(syms)} 檔大戶週序列）")
+    if warnings:
+        print(f"  warnings: {len(warnings)} 則")
+    return n
+
+
 def main(argv: list[str]) -> None:
-    if "--backfill" in argv:
+    if "--backfill-tdcc-hist" in argv:
+        i = argv.index("--backfill-tdcc-hist")
+        start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
+        end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None
+        backfill_tdcc_history(start, end)
+    elif "--backfill" in argv:
         i = argv.index("--backfill")
         start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
         end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None

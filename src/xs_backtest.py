@@ -13,7 +13,9 @@
     --top N：每日只取成交量前 N 檔形成流動性橫斷面（0=全部，全市場建議 200~300）。
     --cost：每單位「名單週轉」的來回成本%（預設 0.45，約台股稅費折後 + 借券概估）。
     --holds：持有期（每幾日換倉）清單，用來看降週轉後淨報酬。
-    --composite：多因子複合（法人流 5 日 + 法人流 20 日 + 外資流 5 日，每日跨股 z-score 等權）；
+    --composite：多因子複合（法人流 5 日 + 法人流 20 日 + 外資流 5 日，每日跨股 z-score 等權）。
+    --tdcc：在複合再加 **TDCC 大戶週變化**（限有 TDCC 歷史的聚焦池）。
+    --composite --tdcc-pool：3 因子但限同一聚焦池（與 --tdcc 公平對照）。
                  預設僅單因子（法人流 window 日）。
 """
 from __future__ import annotations
@@ -37,26 +39,44 @@ def _std(v: list[float]) -> float:
 
 
 def _prep(start, end):
-    """載入 xs.db 面板一次，回傳 (dates, flows, fflows, closes, vols)；不足回 None。"""
+    """載入 xs.db 面板一次，回傳 (dates, flows, fflows, tdcc_series, closes, vols)；不足回 None。"""
     with xs_db.connect() as conn:
         closes, flows, vols, dates = xs_db.load_panel(conn)
         fflows = xs_db.load_foreign_flows(conn)
+        tdcc_series = xs_db.load_tdcc_series(conn)
     if start:
         dates = [d for d in dates if d >= start]
     if end:
         dates = [d for d in dates if d <= end]
     if len(dates) < 10:
         return None
-    return dates, flows, fflows, closes, vols
+    return dates, flows, fflows, tdcc_series, closes, vols
 
 
-def build_signal(dates, flows, fflows, window, mode):
-    """mode='single' -> 法人流 window 日；'composite' -> 法人流5+法人流20+外資流5 跨股 z 等權。"""
+def _restrict(sig, keep):
+    return {s: v for s, v in sig.items() if s in keep}
+
+
+def build_signal(dates, flows, fflows, tdcc_series, window, mode):
+    """訊號建構。
+    single             -> 法人流 window 日
+    composite          -> 法人流5+法人流20+外資流5（全市場）
+    composite_tdccpool -> 同上但限有 TDCC 歷史的聚焦池（與 tdcc 公平對照）
+    tdcc               -> 法人流5+法人流20+外資流5+**大戶週變化**（限聚焦池）
+    """
+    f5 = xs.smoothed_flow(flows, dates, 5)
+    f20 = xs.smoothed_flow(flows, dates, 20)
+    ff5 = xs.smoothed_flow(fflows, dates, 5)
+    if mode in ("tdcc", "composite_tdccpool"):
+        tchg = xs.tdcc_change_factor(tdcc_series, dates)
+        keep = set(tchg)
+        facs = [_restrict(f5, keep), _restrict(f20, keep), _restrict(ff5, keep)]
+        if mode == "tdcc":
+            facs.append(tchg)
+            return xs.composite(facs, dates), "複合4(法人流5+20+外資流5+大戶週變化)｜聚焦池"
+        return xs.composite(facs, dates), "複合3(法人流5+20+外資流5)｜聚焦池"
     if mode == "composite":
-        f5 = xs.smoothed_flow(flows, dates, 5)
-        f20 = xs.smoothed_flow(flows, dates, 20)
-        ff5 = xs.smoothed_flow(fflows, dates, 5)
-        return xs.composite([f5, f20, ff5], dates), "複合(法人流5+法人流20+外資流5)"
+        return xs.composite([f5, f20, ff5], dates), "複合3(法人流5+20+外資流5)"
     return xs.smoothed_flow(flows, dates, window), f"單因子(法人流{window}日)"
 
 
@@ -248,14 +268,21 @@ def main(argv: list[str]) -> None:
     cost = float(opt("--cost", "0.45"))
     holds = [int(x) for x in opt("--holds", "1,5,10,20").split(",")]
     k = int(opt("--subperiods", "4"))
-    mode = "composite" if "--composite" in argv else "single"
+    if "--tdcc" in argv:
+        mode = "tdcc"
+    elif "--composite" in argv and "--tdcc-pool" in argv:
+        mode = "composite_tdccpool"
+    elif "--composite" in argv:
+        mode = "composite"
+    else:
+        mode = "single"
 
     prep = _prep(start, end)
     if prep is None:
         print("[xs_backtest] xs.db 樣本不足，請先 python src/xs_ingest.py --backfill")
         return
-    dates, flows, fflows, closes, vols = prep
-    sig, signal_label = build_signal(dates, flows, fflows, window, mode)
+    dates, flows, fflows, tdcc_series, closes, vols = prep
+    sig, signal_label = build_signal(dates, flows, fflows, tdcc_series, window, mode)
     res, daily = run(dates, sig, closes, vols, q, top)
     costs = cost_sweep(dates, sig, closes, vols, q, top, holds, cost)
     subs = subperiods(daily, k)
