@@ -129,4 +129,22 @@ schtasks /Delete /TN "CMoney_2344_Daily" /F   # 刪除（或執行 schedule_dele
 > **完整調適流程見 [TUNING.md](TUNING.md)** —— 內含系統組成、逐步指令、判讀準則、調適決策邏輯與鐵則，
 > 讓任何新對話都能執行「重跑調適 / 重新優化權重」。
 
+---
+
+# 選項 D：橫斷面多股籌碼排序（獨立子系統，MVP）
+
+單股每日方向先天丟失「跨上百檔排序」的籌碼 alpha。此為一個**與單股 production 完全分離**的
+評估子系統（自有 `data/xs.db`，不動 market.db），以**跨股 IC / 分位報酬 / 多空回測**衡量
+籌碼因子有效性（而非單股命中率）。資料源用 TWSE 全市場單次端點（MI_INDEX 收盤、T86 三大法人）。
+
+```powershell
+python src\xs_ingest.py --backfill 2026-01-01 2026-06-24   # 逐日抓全市場 -> 篩股票池 -> data\xs.db
+python src\xs_backtest.py --start 2026-01-01 --window 5 --q 5  # IC / 分位 / 多空 -> reports\xs_backtest_*.md
+```
+
+- **訊號**：三大法人淨額 / 成交量（跨股籌碼流入強度），訊號日 D 盤後可得、預測 **D→D+1**（無 look-ahead）。
+- **指標**：平均 IC（Spearman）、IC_IR、IC>0 比例、分位平均報酬、多空（top−bottom）累積報酬。
+- **股票池**：`src/universe.py`（預設 ~25 檔記憶體/半導體同儕，可增減）。
+- MVP 定位：建立框架並量化因子；真正威力需擴大股票池（數百檔）與更長區間、加入大戶週變化等多因子。
+
 > 06:00 台股未開盤，採前一交易日收盤定數＋隔夜美股/消息，產出盤前走勢研判。本專案為資訊彙整與分析，非投資建議，據此操作風險自負。
