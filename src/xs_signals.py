@@ -53,6 +53,38 @@ def quantile_groups(pairs: list[tuple[str, float]], q: int = 5) -> dict[int, lis
     return out
 
 
+def zscore_map(values: dict[str, float]) -> dict[str, float]:
+    """對一組（同一天跨股）值做 z-score；樣本不足或無變異則全 0。"""
+    vals = list(values.values())
+    n = len(vals)
+    if n < 3:
+        return {k: 0.0 for k in values}
+    m = sum(vals) / n
+    sd = (sum((x - m) ** 2 for x in vals) / n) ** 0.5
+    if sd <= 0:
+        return {k: 0.0 for k in values}
+    return {k: (v - m) / sd for k, v in values.items()}
+
+
+def composite(factor_sigs: list[dict], dates: list[str]) -> dict:
+    """多因子複合：每日對「各因子皆有值」的股票各自跨股 z-score，等權平均成複合分數。
+
+    factor_sigs：[{symbol:{date:val}}, ...]。回傳 comp[symbol][date]。無 look-ahead（逐日獨立）。
+    """
+    if not factor_sigs:
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for d in dates:
+        present = [{s for s in f if d in f[s]} for f in factor_sigs]
+        common = set.intersection(*present) if len(present) > 1 else (present[0] if present else set())
+        if len(common) < 5:
+            continue
+        zmaps = [zscore_map({s: f[s][d] for s in common}) for f in factor_sigs]
+        for s in common:
+            out.setdefault(s, {})[d] = sum(z[s] for z in zmaps) / len(zmaps)
+    return out
+
+
 def smoothed_flow(flows: dict, dates: list[str], window: int = 5) -> dict:
     """對每檔股票的 flow 序列做 window 日移動平均（含當日，僅用過去資料，無 look-ahead）。
 

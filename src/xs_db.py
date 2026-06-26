@@ -117,6 +117,21 @@ def load_panel(conn: sqlite3.Connection) -> tuple[dict, dict, dict, list[str]]:
     return closes, flows, vols, sorted(date_set)
 
 
+def load_foreign_flows(conn: sqlite3.Connection) -> dict:
+    """fflows[symbol][date] = 外資買賣超/成交量（跨股可比的外資流入強度，第二因子用）。"""
+    vols: dict[str, dict[str, float]] = {}
+    for r in conn.execute("SELECT symbol, date, volume FROM xs_candles"):
+        if r["volume"]:
+            vols.setdefault(r["symbol"], {})[r["date"]] = r["volume"]
+    ff: dict[str, dict[str, float]] = {}
+    for r in conn.execute("SELECT symbol, date, foreign_net FROM xs_chips"):
+        v = vols.get(r["symbol"], {}).get(r["date"])
+        if r["foreign_net"] is None or not v:
+            continue
+        ff.setdefault(r["symbol"], {})[r["date"]] = r["foreign_net"] / v
+    return ff
+
+
 def counts(conn: sqlite3.Connection) -> dict:
     return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
             for t in ("xs_candles", "xs_chips", "xs_tdcc")}

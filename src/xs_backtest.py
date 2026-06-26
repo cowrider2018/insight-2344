@@ -9,10 +9,12 @@
 
 用法：
     python src/xs_backtest.py [--start ..] [--end ..] [--window 5] [--q 5] [--top 300]
-                              [--cost 0.45] [--holds 1,5,10,20] [--subperiods 4]
+                              [--cost 0.45] [--holds 1,5,10,20] [--subperiods 4] [--composite]
     --top N：每日只取成交量前 N 檔形成流動性橫斷面（0=全部，全市場建議 200~300）。
     --cost：每單位「名單週轉」的來回成本%（預設 0.45，約台股稅費折後 + 借券概估）。
     --holds：持有期（每幾日換倉）清單，用來看降週轉後淨報酬。
+    --composite：多因子複合（法人流 5 日 + 法人流 20 日 + 外資流 5 日，每日跨股 z-score 等權）；
+                 預設僅單因子（法人流 window 日）。
 """
 from __future__ import annotations
 
@@ -34,17 +36,28 @@ def _std(v: list[float]) -> float:
     return (sum((x - m) ** 2 for x in v) / (len(v) - 1)) ** 0.5
 
 
-def _prep(start, end, window):
-    """載入 xs.db 面板一次，回傳 (dates, sig, closes, vols)；不足回 None。"""
+def _prep(start, end):
+    """載入 xs.db 面板一次，回傳 (dates, flows, fflows, closes, vols)；不足回 None。"""
     with xs_db.connect() as conn:
         closes, flows, vols, dates = xs_db.load_panel(conn)
+        fflows = xs_db.load_foreign_flows(conn)
     if start:
         dates = [d for d in dates if d >= start]
     if end:
         dates = [d for d in dates if d <= end]
     if len(dates) < 10:
         return None
-    return dates, xs.smoothed_flow(flows, dates, window), closes, vols
+    return dates, flows, fflows, closes, vols
+
+
+def build_signal(dates, flows, fflows, window, mode):
+    """mode='single' -> 法人流 window 日；'composite' -> 法人流5+法人流20+外資流5 跨股 z 等權。"""
+    if mode == "composite":
+        f5 = xs.smoothed_flow(flows, dates, 5)
+        f20 = xs.smoothed_flow(flows, dates, 20)
+        ff5 = xs.smoothed_flow(fflows, dates, 5)
+        return xs.composite([f5, f20, ff5], dates), "複合(法人流5+法人流20+外資流5)"
+    return xs.smoothed_flow(flows, dates, window), f"單因子(法人流{window}日)"
 
 
 def _form_baskets(d, sig, closes, vols, q, top):
@@ -169,14 +182,14 @@ def subperiods(daily, k):
     return out
 
 
-def write_report(res, daily, costs, subs, cost, path) -> None:
+def write_report(res, daily, costs, subs, cost, signal_label, path) -> None:
     q = res["q"]
     lines = [
         f"# 橫斷面多股籌碼排序回測（{res['range'][0]} ~ {res['range'][1]}）",
         "",
         f"- 股票池：**{res['universe']}** 檔（每日流動性前 {res['top'] or '全部'} 檔、平均橫斷面 "
         f"{res['avg_xs_size']} 檔）　評估交易日：**{res['n_days']}**　分位數：{q}",
-        "- 訊號：三大法人淨額 / 成交量（跨股籌碼流入強度），預測次日報酬（無 look-ahead）。",
+        f"- 訊號：**{signal_label}**（跨股籌碼流入強度），預測次日報酬（無 look-ahead）。",
         "",
         "## 資訊係數（IC，Spearman）",
         f"- 平均 IC：**{res['mean_ic']:.4f}**　IC_IR：**{res['ic_ir']:.3f}**　"
@@ -235,19 +248,21 @@ def main(argv: list[str]) -> None:
     cost = float(opt("--cost", "0.45"))
     holds = [int(x) for x in opt("--holds", "1,5,10,20").split(",")]
     k = int(opt("--subperiods", "4"))
+    mode = "composite" if "--composite" in argv else "single"
 
-    prep = _prep(start, end, window)
+    prep = _prep(start, end)
     if prep is None:
         print("[xs_backtest] xs.db 樣本不足，請先 python src/xs_ingest.py --backfill")
         return
-    dates, sig, closes, vols = prep
+    dates, flows, fflows, closes, vols = prep
+    sig, signal_label = build_signal(dates, flows, fflows, window, mode)
     res, daily = run(dates, sig, closes, vols, q, top)
     costs = cost_sweep(dates, sig, closes, vols, q, top, holds, cost)
     subs = subperiods(daily, k)
 
     path = config.REPORTS_DIR / f"xs_backtest_{res['range'][0]}_{res['range'][1]}.md"
-    write_report(res, daily, costs, subs, cost, path)
-    print(f"[xs_backtest] 股票池 {res['universe']} 檔、評估 {res['n_days']} 日、每日前 {top or '全部'} 檔")
+    write_report(res, daily, costs, subs, cost, signal_label, path)
+    print(f"[xs_backtest] {signal_label}　股票池 {res['universe']} 檔、評估 {res['n_days']} 日、每日前 {top or '全部'} 檔")
     print(f"  平均 IC {res['mean_ic']:.4f}　IC_IR {res['ic_ir']:.3f}　IC>0 {res['pos_ic_ratio']:.2%}")
     print(f"  多空毛 平均日 {res['ls_mean_daily']:.4%}　累積 {res['ls_cumulative']:.2%}")
     print(f"  成本{cost:.2f}% 下淨累積：" + "　".join(
