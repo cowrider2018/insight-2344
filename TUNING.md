@@ -43,7 +43,7 @@
 | `src/validate_news.py` | **逐型態獨立**驗證次日效應（二項檢定），只有顯著者才給極性，寫 `data/news_patterns.json` |
 
 **產出檔（都在 `data/` 與 `reports/`，已被 .gitignore）**
-- `data/weights.json`：實際採用的**平衡權重** + `neutral_threshold` + `raw_best`（純最高命中率對照）+ coverage。
+- `data/weights.json`：實際採用的**平衡權重** + `neutral_threshold` + `raw_best`（純最高命中率對照）+ coverage + `confidence`（選項 B：信心分層門檻與各層歷史命中率/涵蓋率，供技能標信心等級）。
 - `data/score_params.json`：校準後的評分參數。
 - `data/news_patterns.json`：各消息型態的已驗證極性（`polarity`/`edge`）。
 - `reports/backtest_<start>_<end>.md`：含最佳/平衡權重、**判斷提示指標**（逐指標方向命中率）、單面基準、排行、限制。

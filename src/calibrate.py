@@ -141,6 +141,7 @@ def main(argv: list[str]) -> None:
     best = results[0]
     balanced = bt.pick_balanced(results, balance_tol)
     diagnostics = bt.signal_diagnostics(samples)
+    conf_tiers = bt.confidence_diagnostics(samples, balanced["weights"], balanced["tau"])
 
     out = {
         "symbol": config.SYMBOL,
@@ -164,12 +165,17 @@ def main(argv: list[str]) -> None:
                                  "hit_rate": g["hit_rate"]}
                              for d, g in guard["eligibility"].items()},
         "calibrated": True,
+        "confidence": {"thresholds": {k: bt.confidence.DEFAULT_CONF_PARAMS[k]
+                                      for k in ("conf_hi", "conf_mid", "conf_mag_full",
+                                                "w_conf_mag", "w_conf_agree", "w_conf_chip")},
+                       "tiers": conf_tiers},
         "score_params_file": "data/score_params.json",
     }
     (config.DATA_DIR / "weights.json").write_text(
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     report_path = config.REPORTS_DIR / f"backtest_{start}_{end}.md"
-    bt.write_report(samples, coverage, results, start, end, tol, report_path, balanced, diagnostics)
+    bt.write_report(samples, coverage, results, start, end, tol, report_path, balanced,
+                    diagnostics, conf_tiers)
 
     print(f"[calibrate] 完整網格結果：純最佳 {best['win_rate']:.2%}，平衡(採用) {balanced['win_rate']:.2%}")
     print("  平衡權重 " + "/".join(f"{bt._DIM_ZH[d]}{balanced['weights'][d]:.1f}"

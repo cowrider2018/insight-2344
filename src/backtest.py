@@ -17,6 +17,7 @@ from datetime import date, datetime
 from math import comb
 
 import config
+import confidence
 import indicators
 import scoring
 import timeline_db as tdb
@@ -296,6 +297,38 @@ def apply_guard(samples: list[dict], results: list[dict],
     return results, {"eligibility": elig, "blocked": blocked}
 
 
+def confidence_diagnostics(samples: list[dict], weights: dict, tau: float,
+                           conf_params: dict | None = None) -> dict:
+    """選項 B：各信心層（high/mid/low）的命中率、方向命中率與涵蓋率（全表態，誠實揭露）。
+
+    全表態下總涵蓋率恆為 100%（每天都有標的方向＋信心等級）；本表用來看「高信心子集」
+    是否確實命中率較高，並揭露其占比（涵蓋率），避免靠降涵蓋率作弊。
+    """
+    tiers = {lv: {"hit": 0, "n": 0, "dir_pred": 0, "dir_hit": 0}
+             for lv in ("high", "mid", "low")}
+    for s in samples:
+        pred, comp = scoring.combine(s["scores"], weights, tau)
+        a = confidence.assess(s["scores"], weights, comp, conf_params)
+        t = tiers[a["level"]]
+        t["n"] += 1
+        if pred == s["actual"]:
+            t["hit"] += 1
+        if pred != 0:
+            t["dir_pred"] += 1
+            if pred == s["actual"]:
+                t["dir_hit"] += 1
+    n = len(samples)
+    out = {}
+    for lv, t in tiers.items():
+        out[lv] = {
+            "win_rate": round(t["hit"] / t["n"], 4) if t["n"] else 0.0,
+            "dir_hit_rate": round(t["dir_hit"] / t["dir_pred"], 4) if t["dir_pred"] else 0.0,
+            "n": t["n"],
+            "coverage": round(t["n"] / n, 4) if n else 0.0,
+        }
+    return out
+
+
 def signal_diagnostics(samples: list[dict]) -> list[dict]:
     """逐指標「判斷提示」：每個面與每個技術子訊號的方向命中率與作用涵蓋率。
 
@@ -372,7 +405,8 @@ def _wstr(weights: dict) -> str:
     return "｜".join(f"{_DIM_ZH[d]} {weights[d]:.1f}" for d in scoring.DIMENSIONS)
 
 
-def write_report(samples, coverage, results, start, end, tol, path, balanced=None, diagnostics=None):
+def write_report(samples, coverage, results, start, end, tol, path, balanced=None,
+                 diagnostics=None, confidence_tiers=None):
     n = len(samples)
     dims = scoring.DIMENSIONS
     dist = {1: 0, 0: 0, -1: 0}
@@ -427,6 +461,19 @@ def write_report(samples, coverage, results, start, end, tol, path, balanced=Non
             kind = {"dim": "面", "sub": "技術子訊號", "idsub": "日內子訊號",
                     "brsub": "分點子訊號", "hdsub": "大戶子訊號"}[r["kind"]]
             lines.append(f"| {kind} | {label} | {r['hit_rate']:.2%} | {r['active']} |")
+
+    if confidence_tiers:
+        lines += [
+            "",
+            "## 信心分層命中率（選項 B：全表態＋標信心等級，誠實揭露）",
+            "> 每天仍全表態（涵蓋率合計 100%），另標信心等級；看「高信心子集」是否命中率較高。",
+            "| 信心等級 | 命中率 | 方向命中率 | 樣本數 | 占比(涵蓋率) |",
+            "|---|---|---|---|---|",
+        ]
+        for lv in ("high", "mid", "low"):
+            t = confidence_tiers.get(lv, {})
+            lines.append(f"| {confidence.LEVEL_ZH[lv]} | {t.get('win_rate', 0):.2%} | "
+                         f"{t.get('dir_hit_rate', 0):.2%} | {t.get('n', 0)} | {t.get('coverage', 0):.2%} |")
 
     lines += ["", "## 單面基準命中率（weight=1 單押該面，tau=0.15）", "| 面向 | 命中率 |", "|---|---|"]
     for dim, wr in singles.items():
@@ -486,6 +533,7 @@ def main(argv: list[str]) -> None:
     best = results[0]
     balanced = pick_balanced(results, balance_tol)   # 實際採用：更平衡的權重
     diagnostics = signal_diagnostics(samples)
+    conf_tiers = confidence_diagnostics(samples, balanced["weights"], balanced["tau"])
 
     out = {
         "symbol": config.SYMBOL,
@@ -508,13 +556,18 @@ def main(argv: list[str]) -> None:
         "dim_significance": {d: {"significant": g["significant"], "active": g["active"],
                                  "hit_rate": g["hit_rate"]}
                              for d, g in guard["eligibility"].items()},
+        "confidence": {"thresholds": {k: confidence.DEFAULT_CONF_PARAMS[k]
+                                      for k in ("conf_hi", "conf_mid", "conf_mag_full",
+                                                "w_conf_mag", "w_conf_agree", "w_conf_chip")},
+                       "tiers": conf_tiers},
         "score_params_file": "data/score_params.json",
     }
     weights_path = config.DATA_DIR / "weights.json"
     weights_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
     report_path = config.REPORTS_DIR / f"backtest_{start}_{end}.md"
-    write_report(samples, coverage, results, start, end, tol, report_path, balanced, diagnostics)
+    write_report(samples, coverage, results, start, end, tol, report_path, balanced,
+                 diagnostics, conf_tiers)
 
     print(f"[backtest] 樣本 {len(samples)} 日")
     print(f"  純最佳 命中率 {best['win_rate']:.2%}  權重 "
