@@ -15,7 +15,7 @@ import config
 import news_patterns
 
 DIMENSIONS = ("technical", "chips", "news", "fundamental", "micron", "sox", "intraday",
-              "branch", "holders")
+              "branch", "holders", "futures")
 
 # 可調參數（門檻、尺度、子訊號權重）。calibrate.py 會逐步調整這些。
 DEFAULT_PARAMS: dict = {
@@ -57,6 +57,10 @@ DEFAULT_PARAMS: dict = {
     "holder_chg4w_div": 1.0,    # 大戶比率月變化(pp)/div
     "holder_retail_div": 1.0,   # 散戶比率週變化(pp)/div（上升=分散=偏空，取負）
     "w_hd_chg1w": 0.5, "w_hd_chg4w": 0.4, "w_hd_retail": 0.1,
+    # 第十面：外資台指期未平倉（市場級 regime，口）
+    "fut_oi_div": 40000.0,      # 外資淨未平倉口數 / div 飽和
+    "fut_oi_chg_div": 15000.0,  # 日變化 / div
+    "w_fut_level": 0.7, "w_fut_chg": 0.3,
 }
 
 
@@ -454,6 +458,26 @@ def score_holders(row: dict | None, params: dict | None = None) -> float:
         (sig.get("chg4w", 0.0), p["w_hd_chg4w"]),
         (sig.get("retail", 0.0), p["w_hd_retail"]),
     ]) if sig else 0.0
+
+
+# ---------------- 第十面：外資台指期未平倉（市場級 regime）----------------
+
+def score_futures(row: dict | None, params: dict | None = None) -> float:
+    """外資台指期淨未平倉口數（與日變化）線性正規化。正=外資淨多單 -> 偏多。
+
+    row：futures_oi_asof 回傳（foreign_net_oi + oi_chg）。
+    """
+    p = params or PARAMS
+    if not row:
+        return 0.0
+    parts: list[tuple[float, float]] = []
+    lvl = _safe(row.get("foreign_net_oi"))
+    if lvl is not None:
+        parts.append((clamp(lvl / p["fut_oi_div"]), p["w_fut_level"]))
+    chg = _safe(row.get("oi_chg"))
+    if chg is not None:
+        parts.append((clamp(chg / p["fut_oi_chg_div"]), p["w_fut_chg"]))
+    return _wavg(parts)
 
 
 # ---------------- 綜合 ----------------

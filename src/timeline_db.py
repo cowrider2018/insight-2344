@@ -124,6 +124,13 @@ CREATE TABLE IF NOT EXISTS tdcc_holders (
     PRIMARY KEY (symbol, data_date)
 );
 CREATE INDEX IF NOT EXISTS idx_tdcc_avail ON tdcc_holders(symbol, avail_date);
+
+CREATE TABLE IF NOT EXISTS futures_oi (
+    market         TEXT NOT NULL,           -- 'tx' 臺股期貨（市場級，非 per-2344）
+    date           TEXT NOT NULL,           -- 交易日 YYYY-MM-DD（盤後公布）
+    foreign_net_oi INTEGER,                 -- 外資多空未平倉口數淨額（口，正=淨多）
+    PRIMARY KEY (market, date)
+);
 """
 
 # 集保分散表公布 lag（資料日為週結算、隔週才公布）；保守取 +7 天避免 look-ahead
@@ -392,6 +399,38 @@ def tdcc_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> dict |
     return cur
 
 
+def upsert_futures_oi(conn: sqlite3.Connection, market: str, rows: Iterable[dict]) -> int:
+    """寫入外資台指期淨未平倉（冪等）。rows 須含 date / foreign_net_oi。"""
+    n = 0
+    for r in rows:
+        dd = _norm_date(r.get("date"))
+        if not dd:
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO futures_oi (market, date, foreign_net_oi) VALUES (?,?,?)",
+            (market, dd, r.get("foreign_net_oi")),
+        )
+        n += 1
+    return n
+
+
+def futures_oi_asof(conn: sqlite3.Connection, market: str, before_date: str) -> dict | None:
+    """取 date < before_date 的最新外資台指期淨未平倉（盤前可得的 D-1），附日變化 oi_chg。"""
+    rows = conn.execute(
+        """SELECT date, foreign_net_oi FROM futures_oi WHERE market = ? AND date < ?
+           ORDER BY date DESC LIMIT 2""",
+        (market, before_date),
+    ).fetchall()
+    if not rows:
+        return None
+    cur = dict(rows[0])
+    if len(rows) > 1 and rows[1]["foreign_net_oi"] is not None and cur["foreign_net_oi"] is not None:
+        cur["oi_chg"] = cur["foreign_net_oi"] - rows[1]["foreign_net_oi"]
+    else:
+        cur["oi_chg"] = None
+    return cur
+
+
 def branch_wf_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> dict | None:
     """取 date < before_date 的最新 walk-forward 分點分數（盤前可得的 D-1 值）。"""
     row = conn.execute(
@@ -443,7 +482,7 @@ def intraday_asof(conn: sqlite3.Connection, symbol: str, before_date: str) -> li
 def counts(conn: sqlite3.Connection) -> dict:
     out = {}
     for t in ("news", "chips", "revenue", "candles", "us_market", "candles_1min",
-              "broker_branches", "branch_wf", "tdcc_holders"):
+              "broker_branches", "branch_wf", "tdcc_holders", "futures_oi"):
         out[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
     return out
 

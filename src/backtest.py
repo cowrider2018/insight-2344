@@ -85,7 +85,7 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
     candles = tdb.candles_upto(conn, symbol)  # 由舊到新
     feats: list[dict] = []
     coverage = {"chips": 0, "news": 0, "fundamental": 0, "micron": 0, "sox": 0,
-                "intraday": 0, "branch": 0, "holders": 0}
+                "intraday": 0, "branch": 0, "holders": 0, "futures": 0}
 
     for i in range(1, len(candles)):
         D = candles[i]
@@ -130,9 +130,12 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
         holders = tdb.tdcc_asof(conn, symbol, d_date)  # 公布日 < D 的最新集保大戶持股
         assert holders is None or holders["avail_date"] < d_date, "look-ahead: 集保大戶公布日超過 D"
 
+        futures = tdb.futures_oi_asof(conn, "tx", d_date)  # 盤後公布，取 date < D 的 D-1
+        assert futures is None or futures["date"] < d_date, "look-ahead: 外資台指期未平倉超過 D"
+
         for key, present in (("chips", chips), ("news", news), ("fundamental", rev),
                              ("micron", mu), ("sox", sox), ("intraday", intraday),
-                             ("branch", branch), ("holders", holders)):
+                             ("branch", branch), ("holders", holders), ("futures", futures)):
             if present:
                 coverage[key] += 1
 
@@ -142,7 +145,7 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
             "technical": technical, "prev_close": prev_close,
             "chips": chips, "ref_vol_lots": ref_vol_lots,
             "news": news, "rev": rev, "mu": mu, "sox": sox, "intraday": intraday,
-            "branch": branch, "branch_wf": branch_wf, "holders": holders,
+            "branch": branch, "branch_wf": branch_wf, "holders": holders, "futures": futures,
             "change_pct": round(pct, 2),
             "actual": label_from_pct(pct, tol),
         })
@@ -171,6 +174,7 @@ def score_samples(feats: list[dict], params: dict | None = None) -> list[dict]:
             "intraday": scoring.score_intraday(f["intraday"], p) if f.get("intraday") else None,
             "branch": scoring.score_branch(f["branch"], p, wf_score) if f.get("branch") else None,
             "holders": scoring.score_holders(f["holders"], p) if f.get("holders") else None,
+            "futures": scoring.score_futures(f["futures"], p) if f.get("futures") else None,
         }
         samples.append({"date": f["date"], "scores": scores, "subsignals": sub,
                         "id_subsignals": id_sub, "branch_subsignals": br_sub,
@@ -347,7 +351,7 @@ def baseline_single_dim(samples: list[dict], tau: float = 0.15) -> dict:
 
 _DIM_ZH = {"technical": "技術", "chips": "籌碼", "news": "消息", "fundamental": "基本",
            "micron": "美光", "sox": "費半", "intraday": "日內", "branch": "分點",
-           "holders": "大戶"}
+           "holders": "大戶", "futures": "台期"}
 
 
 _SUB_ZH = {"ma": "均線", "kd": "KD", "rsi": "RSI", "macd": "MACD", "bias": "乖離", "volprice": "量價"}
@@ -449,6 +453,8 @@ def write_report(samples, coverage, results, start, end, tol, path, balanced=Non
         "歷史無法回補，須每日累積）；隔日沖/長線分類為人工種子名單，待累積後以行為統計精進。",
         f"- 第九面（TDCC 千張大戶）{coverage.get('holders', 0)}/{n} 日有資料（集保週頻、公布有 lag，"
         "以公布日 avail_date<D 比較）；週變化緩、單股訊號可能弱，未達顯著門檻時權重被護欄歸 0。",
+        f"- 第十面（外資台指期未平倉）{coverage.get('futures', 0)}/{n} 日有資料（盤後公布，date<D 取 D-1）；"
+        "市場級 regime 訊號，與美光/費半（市場 beta）可能相關，單股增益有限但可能穩定。",
         "- 基本面（月營收）變動緩慢且舊月難回補，貢獻有限。",
         "- 隔夜美光/費半為強外生訊號，但與大盤高度相關，須留意過擬合；建議以樣本外驗證複核。",
         "- 本回測無交易成本/滑價假設，命中率非報酬率，僅供權重相對比較。",

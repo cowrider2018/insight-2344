@@ -9,6 +9,7 @@ import json
 import config
 import fetch_dj_chips
 import fetch_fugle
+import fetch_taifex
 import fetch_tdcc
 import fetch_twse
 import fetch_us
@@ -78,6 +79,14 @@ def build() -> dict:
         holders = None
     status["tdcc"] = "ok" if holders else "partial"
 
+    # --- 外資台指期未平倉（TAIFEX，第十面，市場級）---
+    try:
+        futures = fetch_taifex.fetch_oi(warnings=warnings)
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"taifex 例外: {e}")
+        futures = None
+    status["taifex"] = "ok" if futures else "partial"
+
     dataset = {
         "symbol": config.SYMBOL,
         "name": fg.get("name", config.NAME),
@@ -93,6 +102,7 @@ def build() -> dict:
         "intraday": fg.get("intraday"),       # 第七面：當日 1 分 K（供累積）
         "branch": branch,                     # 第八面：主力分點（供累積）
         "holders": holders or {},             # 第九面：TDCC 千張大戶（當週，供累積）
+        "futures": futures or {},             # 第十面：外資台指期未平倉（D-1，供累積）
         "source_status": status,
     }
     return dataset
@@ -105,9 +115,10 @@ def main():
     s = dataset["source_status"]
     print(f"[build_dataset] 寫入 {out}")
     print(f"  fugle={s['fugle']} twse={s['twse']} cmoney={s['cmoney']} us={s.get('us')} "
-          f"dj={s.get('dj')} tdcc={s.get('tdcc')} news={len(dataset['news'])} "
+          f"dj={s.get('dj')} tdcc={s.get('tdcc')} taifex={s.get('taifex')} news={len(dataset['news'])} "
           f"branch={len(dataset.get('branch', {}).get('rows', []))} "
-          f"holders={'y' if dataset.get('holders') else 'n'} trading_date={dataset['trading_date']}")
+          f"holders={'y' if dataset.get('holders') else 'n'} "
+          f"futures={'y' if dataset.get('futures') else 'n'} trading_date={dataset['trading_date']}")
     if s["warnings"]:
         print("  warnings:")
         for w in s["warnings"]:
@@ -122,7 +133,7 @@ def main():
         print(f"  timeline_db: news+{st['news']} chips+{st['chips']} "
               f"revenue+{st['revenue']} candles+{st['candles']} us+{st.get('us', 0)} "
               f"intraday+{st.get('intraday', 0)} branch+{st.get('branch', 0)} "
-              f"holders+{st.get('holders', 0)}")
+              f"holders+{st.get('holders', 0)} futures+{st.get('futures', 0)}")
     except Exception as e:  # noqa: BLE001
         print(f"  timeline_db 攝取略過: {e}")
     return out

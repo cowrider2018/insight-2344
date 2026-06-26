@@ -30,7 +30,7 @@ def ingest_dataset(dataset: dict, conn=None) -> dict:
 
     def _do(conn):
         stats = {"news": 0, "chips": 0, "revenue": 0, "candles": 0, "us": 0,
-                 "intraday": 0, "branch": 0, "holders": 0}
+                 "intraday": 0, "branch": 0, "holders": 0, "futures": 0}
         stats["news"] = tdb.upsert_news(conn, dataset.get("news", []) or [], symbol, ingested_at)
 
         chips = dataset.get("chips") or {}
@@ -73,6 +73,11 @@ def ingest_dataset(dataset: dict, conn=None) -> dict:
             tdb.upsert_tdcc(conn, symbol, holders["data_date"], holders.get("big_pct"),
                             holders.get("mid_pct"), holders.get("retail_pct"))
             stats["holders"] = 1
+
+        # 第十面：外資台指期未平倉（市場級，TAIFEX 每日盤後）
+        futures = dataset.get("futures") or {}
+        if futures.get("date") and futures.get("foreign_net_oi") is not None:
+            stats["futures"] = tdb.upsert_futures_oi(conn, "tx", [futures])
         return stats
 
     if conn is not None:
@@ -318,6 +323,23 @@ def backfill_tdcc(start: str | None = None, end: str | None = None) -> int:
     return total
 
 
+def backfill_futures(start: str | None = None, end: str | None = None) -> int:
+    """回補外資台指期淨未平倉（TAIFEX CSV 一次取整段；省略日期=取 candles 全區間）。"""
+    import fetch_taifex
+    tdb.init_db()
+    warnings: list[str] = []
+    with tdb.connect() as conn:
+        all_dates = [r["date"] for r in tdb.candles_upto(conn, config.SYMBOL)]
+        start = start or (all_dates[0] if all_dates else "2025-01-01")
+        end = end or (all_dates[-1] if all_dates else config.today_str())
+        rows = fetch_taifex.fetch_range(start, end, warnings)
+        n = tdb.upsert_futures_oi(conn, "tx", rows)
+    print(f"[backfill_futures] 區間 {start} ~ {end}，外資台指期未平倉 upsert {n} 日")
+    if warnings:
+        print(f"  warnings: {warnings}")
+    return n
+
+
 def main(argv: list[str]) -> None:
     if "--backfill-json" in argv:
         backfill_from_json()
@@ -345,6 +367,11 @@ def main(argv: list[str]) -> None:
         start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
         end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None
         backfill_tdcc(start, end)
+    if "--backfill-futures" in argv:
+        i = argv.index("--backfill-futures")
+        start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
+        end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None
+        backfill_futures(start, end)
     if len(argv) <= 1:
         print(__doc__)
 
