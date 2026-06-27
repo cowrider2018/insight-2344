@@ -33,16 +33,46 @@ def _sign(x: float) -> int:
     return 1 if x > 0 else (-1 if x < 0 else 0)
 
 
+# 平淡夜專屬訊號權重（由 flat_night_diagnostics 選出：大戶週變化 / 分點隔日沖 / 均線）
+FLAT_W = {"hd_chg1w": 0.4, "br_daytrade": 0.4, "tech_ma": 0.2}
+
+
+def flat_night_side(sample: dict | None) -> tuple[int, float]:
+    """平淡夜專屬選邊：大戶週變化 + 分點隔日沖 + 均線 的加權，回傳 (side, |strength|)。"""
+    if not sample:
+        return 0, 0.0
+    hd = sample.get("hd_subsignals", {}).get("chg1w")
+    dt = sample.get("branch_subsignals", {}).get("daytrade")
+    ma = sample.get("subsignals", {}).get("ma")
+    val = 0.0
+    for v, w in ((hd, FLAT_W["hd_chg1w"]), (dt, FLAT_W["br_daytrade"]), (ma, FLAT_W["tech_ma"])):
+        if v is not None:
+            val += v * w
+    return _sign(val), abs(val)
+
+
 def decide(scores: dict, weights: dict, overnight_pct: float | None,
-           decisive_thr: float = DECISIVE_THR) -> dict:
-    """回傳每日選邊：side(+1/-1)、basis(overnight/model)、confidence(高/中/低)、composite。"""
+           decisive_thr: float = DECISIVE_THR, sample: dict | None = None,
+           flat_signal: bool = False) -> dict:
+    """回傳每日選邊：side(+1/-1)、basis、confidence、composite。
+
+    決斷夜→跟隔夜（OOS/跨年 ~68~71%，可靠）；平淡夜→十面 composite（~53% OOS≈擲幣，保守）。
+    flat_signal=True 會改用平淡夜專屬訊號(大戶週變化+分點隔日沖+均線)——**樣本內 ~67% 但未過 OOS
+    （選擇偏誤+樣本過小），預設關閉**，待累積更多平淡夜資料再驗，勿據此重押。
+    """
     _, comp = scoring.combine(scores, weights, tau=0.0)   # tau=0 只取 composite
     if overnight_pct is not None and abs(overnight_pct) >= decisive_thr:
         side = _sign(overnight_pct) or _sign(comp) or 1
         conf = "高" if abs(overnight_pct) >= 2.0 else "中高"
         return {"side": side, "basis": "overnight", "confidence": conf,
                 "composite": round(comp, 4), "overnight_pct": overnight_pct}
-    # 平淡夜：用十面綜合
+    # 平淡夜
+    if flat_signal:
+        fside, fstr = flat_night_side(sample)
+        if fside != 0:
+            return {"side": fside, "basis": "flat_signal",
+                    "confidence": "中" if fstr >= 0.15 else "低",
+                    "composite": round(comp, 4), "overnight_pct": overnight_pct}
     side = _sign(comp) or 1
     conf = "中" if abs(comp) >= 0.20 else "低"
     return {"side": side, "basis": "model", "confidence": conf,
@@ -103,7 +133,7 @@ def analyze(start: str, end: str, decisive_thr: float = DECISIVE_THR,
     }
 
 
-def _eval_rule(samples, weights, ov, decisive_thr):
+def _eval_rule(samples, weights, ov, decisive_thr, flat_signal=True):
     """對 samples 套用決策規則，回傳 combined/decisive/flat/always_overnight 方向勝率。"""
     seg = {"decisive": [0, 0], "flat": [0, 0]}
     comb = [0, 0]
@@ -113,7 +143,7 @@ def _eval_rule(samples, weights, ov, decisive_thr):
         if actual == 0:
             continue
         o = ov.get(s["date"])
-        d = decide(s["scores"], weights, o, decisive_thr)
+        d = decide(s["scores"], weights, o, decisive_thr, sample=s, flat_signal=flat_signal)
         comb[1] += 1
         comb[0] += (d["side"] == actual)
         key = "decisive" if d["basis"] == "overnight" else "flat"
@@ -131,7 +161,8 @@ def _eval_rule(samples, weights, ov, decisive_thr):
 
 
 def oos(start: str, end: str, split: float = 0.7, rounds: int = 2,
-        decisive_thr: float = DECISIVE_THR, neutral: float = NEUTRAL) -> dict:
+        decisive_thr: float = DECISIVE_THR, neutral: float = NEUTRAL,
+        flat_signal: bool = True) -> dict:
     """視窗內 train/test：只在 train 校參+選權重，套決策規則到 held-out test。"""
     import calibrate as cal
     with tdb.connect() as conn:
@@ -147,13 +178,55 @@ def oos(start: str, end: str, split: float = 0.7, rounds: int = 2,
     res = bt.optimize(tr_s)
     res, _ = bt.apply_guard(tr_s, res)
     W = bt.pick_balanced(res, 0.0)["weights"]             # 只在 train 選權重
+    tr_s, te_s = bt.score_samples(tr, params), bt.score_samples(te, params)
     return {
         "split": split, "n_train": len(tr), "n_test": len(te),
         "train_window": [tr[0]["date"], tr[-1]["date"]] if tr else [],
         "test_window": [te[0]["date"], te[-1]["date"]] if te else [],
-        "in_sample_train": _eval_rule(bt.score_samples(tr, params), W, ov, decisive_thr),
-        "out_of_sample_test": _eval_rule(bt.score_samples(te, params), W, ov, decisive_thr),
+        # 兩變體：平淡夜用十面 composite（舊）vs 平淡夜專屬訊號（新）
+        "test_composite": _eval_rule(te_s, W, ov, decisive_thr, flat_signal=False),
+        "test_flatsignal": _eval_rule(te_s, W, ov, decisive_thr, flat_signal=True),
+        "train_flatsignal": _eval_rule(tr_s, W, ov, decisive_thr, flat_signal=True),
     }
+
+
+def flat_night_diagnostics(start: str, end: str, decisive_thr: float = DECISIVE_THR,
+                           neutral: float = NEUTRAL, min_active: int = 12) -> dict:
+    """平淡夜（|昨晚費半|<thr）的逐訊號同日方向命中率——找能救平淡夜(>55%)的訊號。"""
+    with tdb.connect() as conn:
+        feats, _ = bt.extract_features(conn, config.SYMBOL, start, end, neutral)
+        samples = bt.score_samples(feats)
+        ov = {}
+        for f in feats:
+            us = tdb.us_asof(conn, "sox", f["date"])
+            ov[f["date"]] = us["change_pct"] if us and us.get("change_pct") is not None else None
+    flat = [s for s in samples
+            if (ov.get(s["date"]) is None or abs(ov[s["date"]]) < decisive_thr) and s["actual"] != 0]
+    rows = []
+
+    def measure(name, getter):
+        a = h = 0
+        for s in flat:
+            v = getter(s)
+            if v is None or v == 0:
+                continue
+            a += 1
+            h += ((1 if v > 0 else -1) == s["actual"])
+        if a >= min_active:
+            rows.append({"signal": name, "win": round(h / a, 4), "active": a})
+
+    for d in scoring.DIMENSIONS:
+        measure("面:" + d, lambda s, k=d: s["scores"].get(k))
+    for k in ("ma", "kd", "rsi", "macd", "bias", "volprice"):
+        measure("技:" + k, lambda s, kk=k: s["subsignals"].get(kk))
+    for k in ("vwap", "pos", "tail", "trend", "volconc"):
+        measure("日內:" + k, lambda s, kk=k: s.get("id_subsignals", {}).get(kk))
+    for k in ("net", "conc", "smart", "daytrade", "longterm"):
+        measure("分點:" + k, lambda s, kk=k: s.get("branch_subsignals", {}).get(kk))
+    for k in ("chg1w", "chg4w", "retail"):
+        measure("大戶:" + k, lambda s, kk=k: s.get("hd_subsignals", {}).get(kk))
+    rows.sort(key=lambda r: -r["win"])
+    return {"n_flat_moving": len(flat), "signals": rows}
 
 
 def cross_year_overnight(decisive_thr: float = DECISIVE_THR, neutral: float = NEUTRAL) -> dict:
@@ -209,6 +282,12 @@ def main(argv):
     start = opt("--start", "2025-07-01")
     end = opt("--end", config.today_str()[:4] + "-12-31")
     thr = float(opt("--thr", str(DECISIVE_THR)))
+    if "--flat-diag" in argv:
+        r = flat_night_diagnostics(start, end, thr)
+        print(f"[平淡夜逐訊號] |SOX|<{thr}% 的移動日 {r['n_flat_moving']} 天，同日方向命中率：")
+        for x in r["signals"]:
+            print(f"  {x['signal']:<12} {x['win']:.1%}  (active {x['active']})")
+        return
     if "--cross-year" in argv:
         cy = cross_year_overnight(thr)
         print(f"[daily_decision 跨年] 決斷夜跟隔夜核心（全日方向，門檻 |SOX|>={thr}%）：")
@@ -220,12 +299,13 @@ def main(argv):
         o = oos(start, end, float(opt("--split", "0.7")), int(opt("--rounds", "2")), thr)
         print(f"[daily_decision OOS] train {o['n_train']} 日 {o['train_window']} / "
               f"test {o['n_test']} 日 {o['test_window']}  (split={o['split']})")
-        for tag, key in (("in-sample(train)", "in_sample_train"), ("OUT-OF-SAMPLE(test)", "out_of_sample_test")):
+        for tag, key in (("train(平淡夜新訊號)", "train_flatsignal"),
+                         ("OOS test(平淡夜=十面composite 舊)", "test_composite"),
+                         ("OOS test(平淡夜=專屬訊號 新)", "test_flatsignal")):
             e = o[key]
             print(f"  {tag}: 合併 {e['combined']['win']:.1%}(n={e['combined']['n']})  "
                   f"決斷夜 {e['decisive']['win']:.1%}(n={e['decisive']['n']})  "
-                  f"平淡夜 {e['flat']['win']:.1%}(n={e['flat']['n']})  "
-                  f"全跟隔夜 {e['always_overnight']['win']:.1%}")
+                  f"平淡夜 {e['flat']['win']:.1%}(n={e['flat']['n']})")
         return
     r = analyze(start, end, thr)
     print(f"[daily_decision] {r['window'][0]}~{r['window'][1]}  {r['n_days']} 日  "

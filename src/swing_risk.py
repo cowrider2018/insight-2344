@@ -115,6 +115,13 @@ def estimate(overnight_pct: float | None = None, thresholds=DEFAULT_THRESHOLDS, 
         thr = 2.0 if absov >= 2.0 else (1.0 if absov >= 1.0 else 0.0)
         conviction = "決斷" if thr == 2.0 else ("中度" if thr == 1.0 else "平淡")
         tier = acc.get(f"昨晚費半|≥{thr}%", {})
+        # 部位旗標：決斷夜(|SOX|≥1%, OOS ~68~71%)可重押；平淡夜(~53%)保守
+        if thr >= 2.0:
+            stance, stance_reason = "重押", "決斷夜(|SOX|≥2%)：跟隔夜方向，OOS/跨年同日勝率 ~70%"
+        elif thr >= 1.0:
+            stance, stance_reason = "重押", "決斷夜(|SOX|≥1%)：跟隔夜方向，OOS 同日勝率 ~68%"
+        else:
+            stance, stance_reason = "保守", "平淡夜(|SOX|<1%)：十面 OOS ~53%≈擲幣，宜小量或只看風險"
         return {
             "symbol": config.SYMBOL,
             "as_of_date": samples[-1]["date"],
@@ -124,6 +131,8 @@ def estimate(overnight_pct: float | None = None, thresholds=DEFAULT_THRESHOLDS, 
             "current_vol_10d": round(cur_vol, 3),
             "today_prob": table.get(bk) if bk else table["全部"],   # 採昨晚情境（被殺機率主依據）
             "conviction": conviction,                                # 決斷/中度/平淡（由 |昨晚費半| 分層）
+            "stance": stance,                                        # 重押 / 保守（今日該不該下重手）
+            "stance_reason": stance_reason,
             "dir_winrate": tier,                                     # 該決斷度的同日方向歷史命中（開盤/全日 + 涵蓋）
             "by_overnight": table,
             "n_samples": len(samples),

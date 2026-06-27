@@ -135,6 +135,7 @@ def main():
         print(f"  早盤被殺風險: 昨晚SOX {sw.get('overnight_sox_pct')}% -> {sw.get('overnight_bucket')}情境"
               f"  開盤殺>=2% {tp[2.0]['open_down']:.0%}  全日收黑>=2% {tp[2.0]['day_down']:.0%}"
               f"  開高>=2% {tp[2.0]['open_up']:.0%}")
+        print(f"  部位旗標: 【{sw.get('stance')}】 {sw.get('stance_reason')}")
     if s["warnings"]:
         print("  warnings:")
         for w in s["warnings"]:

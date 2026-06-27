@@ -15,6 +15,10 @@
   - **跨年複核（`--cross-year`）**：決斷夜跟隔夜 **2024 年 70.7% / 2025 年 71.0%**（兩年一致，結構性穩定）；全隔夜 ~62~63%。
   - **誠實結論**：每日選邊 OOS **~65%（>60%，未達 67%）**；真正可靠的邊際是**決斷夜跟隔夜 ~68~71%（跨年穩定、weight-free）**；
     **平淡夜十面 ~53% 幾無邊際**。**67% 目標靠決斷夜重押、平淡夜保守**達成。
+  - **部位旗標**：`swing_risk.stance`＝**重押**(決斷夜)/**保守**(平淡夜)，每日盤前一眼判部位大小。
+  - **救平淡夜（嘗試，結論：未過 OOS）**：平淡夜逐訊號實測，大戶週變化 62.7%、分點隔日沖 62.3%（樣本內最佳）；
+    組成平淡夜專屬訊號樣本內把平淡夜拉到 67.6%、合併 70%，**但 OOS 測試段（僅 13 平淡夜日）46%、未撐住**（選擇偏誤＋樣本過小）。
+    → 預設**不啟用**（`daily_decision.decide(flat_signal=False)`），平淡夜維持保守；待累積更多平淡夜資料再驗。
 - **回測 / 權重優化**：`src/scoring.py` + `src/backtest.py` → `data/weights.json`（六面權重 + 中性門檻）
 - **參數校準**：`src/calibrate.py` → `data/score_params.json`；**消息型態驗證**：`src/validate_news.py` → `data/news_patterns.json`
 - **分析（Claude）**：技能 `/cmoney-2344-daily` 讀 JSON + weights → `reports/2344_YYYYMMDD.md`
