@@ -23,6 +23,7 @@ from __future__ import annotations
 import sys
 
 import config
+import universe
 import xs_db
 import xs_signals as xs
 
@@ -68,12 +69,13 @@ def build_signal(dates, flows, fflows, tdcc_series, window, mode):
     f20 = xs.smoothed_flow(flows, dates, 20)
     ff5 = xs.smoothed_flow(fflows, dates, 5)
     if mode in ("tdcc", "composite_tdccpool"):
-        tchg = xs.tdcc_change_factor(tdcc_series, dates)
-        keep = set(tchg)
-        facs = [_restrict(f5, keep), _restrict(f20, keep), _restrict(ff5, keep)]
         if mode == "tdcc":
-            facs.append(tchg)
+            tchg = xs.tdcc_change_factor(tdcc_series, dates)
+            keep = set(tchg)  # 4 因子：限有大戶週變化的股票
+            facs = [_restrict(f5, keep), _restrict(f20, keep), _restrict(ff5, keep), tchg]
             return xs.composite(facs, dates), "複合4(法人流5+20+外資流5+大戶週變化)｜聚焦池"
+        keep = set(universe.SYMBOLS)  # 3 因子：限策展焦點池（與 TDCC 資料是否在窗內無關）
+        facs = [_restrict(f5, keep), _restrict(f20, keep), _restrict(ff5, keep)]
         return xs.composite(facs, dates), "複合3(法人流5+20+外資流5)｜聚焦池"
     if mode == "composite":
         return xs.composite([f5, f20, ff5], dates), "複合3(法人流5+20+外資流5)"

@@ -177,6 +177,50 @@ def backfill(start: str | None = None, end: str | None = None,
     return tot
 
 
+def _weekdays(start: str, end: str):
+    from datetime import date, timedelta
+    cur = date(*(int(x) for x in start.split("-")))
+    last = date(*(int(x) for x in end.split("-")))
+    while cur <= last:
+        if cur.weekday() < 5:
+            yield cur.isoformat()
+        cur += timedelta(days=1)
+
+
+def backfill_range(start: str, end: str, all_market: bool = True) -> dict:
+    """以「週一~週五」逐日回補任意區間（不依賴 market.db 1 年 scaffold；非交易日 MI_INDEX 回空即跳過）。
+
+    供把 chip+foreign 3 因子往更早拉（TWSE 多年；TDCC/Fugle 受 1 年保留期限不適用）。
+    """
+    want = None if all_market else set(universe.SYMBOLS)
+    xs_db.init_db()
+    warnings: list[str] = []
+    days = list(_weekdays(start, end))
+    tot = {"candles": 0, "chips": 0, "skip": 0, "holiday": 0}
+    with xs_db.connect() as conn:
+        done = ({r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_candles")}
+                & {r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_chips")})
+        print(f"[xs-range] {start}~{end} 共 {len(days)} 個平日（逐日抓 TWSE 全市場、跳過非交易日）")
+        for k, d in enumerate(days, 1):
+            if d in done:
+                tot["skip"] += 1
+                continue
+            ymd = d.replace("-", "")
+            cl = fetch_closes_allstock(ymd, want, warnings)
+            if not cl:                       # 非交易日/未公布 -> 不再打 T86
+                tot["holiday"] += 1
+                continue
+            tot["candles"] += xs_db.upsert_candles(conn, cl)
+            tot["chips"] += xs_db.upsert_chips(conn, fetch_chips_allstock(ymd, want, warnings))
+            if k % 10 == 0:
+                conn.commit()
+                print(f"  ...{k}/{len(days)}（{d}）candles+{tot['candles']} chips+{tot['chips']} "
+                      f"skip{tot['skip']} 非交易{tot['holiday']}")
+            time.sleep(0.3)
+    print(f"[xs-range] 完成：candles {tot['candles']}、chips {tot['chips']}、已存跳過 {tot['skip']}")
+    return tot
+
+
 def backfill_tdcc_history(start: str | None = None, end: str | None = None) -> int:
     """聚焦池（universe.SYMBOLS）逐檔逐週回補 TDCC 大戶占比歷史 → xs.db.xs_tdcc。
 
@@ -194,8 +238,15 @@ def backfill_tdcc_history(start: str | None = None, end: str | None = None) -> i
         return f"{d[:4]}-{d[4:6]}-{d[6:]}"
 
     weeks = [w for w in weeks if (not start or _iso(w) >= start) and (not end or _iso(w) <= end)]
-    syms = list(universe.SYMBOLS)
-    print(f"[tdcc-hist] 聚焦 {len(syms)} 檔 × {len(weeks)} 週，逐檔逐週查 smart.tdcc（較慢，約 20+ 分）")
+    # 跳過已有 >=2 週歷史的股票（可續抓擴池新增者）
+    with xs_db.connect() as conn:
+        done = {r[0] for r in conn.execute(
+            "SELECT symbol FROM xs_tdcc GROUP BY symbol HAVING COUNT(*) >= 2")}
+    syms = [s for s in universe.SYMBOLS if s not in done]
+    if not syms:
+        print(f"[tdcc-hist] 聚焦池 {len(universe.SYMBOLS)} 檔皆已有歷史，無需回補")
+        return 0
+    print(f"[tdcc-hist] 新增 {len(syms)}/{len(universe.SYMBOLS)} 檔 × {len(weeks)} 週，逐檔逐週查 smart.tdcc（較慢）")
     rows = fetch_tdcc.fetch_big_pct_history(syms, weeks, warnings)
     with xs_db.connect() as conn:
         n = xs_db.upsert_tdcc(conn, rows)
@@ -206,7 +257,10 @@ def backfill_tdcc_history(start: str | None = None, end: str | None = None) -> i
 
 
 def main(argv: list[str]) -> None:
-    if "--backfill-tdcc-hist" in argv:
+    if "--backfill-range" in argv:
+        i = argv.index("--backfill-range")
+        backfill_range(argv[i + 1], argv[i + 2], all_market="--all" in argv or True)
+    elif "--backfill-tdcc-hist" in argv:
         i = argv.index("--backfill-tdcc-hist")
         start = argv[i + 1] if len(argv) > i + 1 and not argv[i + 1].startswith("--") else None
         end = argv[i + 2] if len(argv) > i + 2 and not argv[i + 2].startswith("--") else None
