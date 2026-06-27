@@ -103,12 +103,130 @@ def analyze(start: str, end: str, decisive_thr: float = DECISIVE_THR,
     }
 
 
+def _eval_rule(samples, weights, ov, decisive_thr):
+    """對 samples 套用決策規則，回傳 combined/decisive/flat/always_overnight 方向勝率。"""
+    seg = {"decisive": [0, 0], "flat": [0, 0]}
+    comb = [0, 0]
+    aov = [0, 0]
+    for s in samples:
+        actual = s["actual"]
+        if actual == 0:
+            continue
+        o = ov.get(s["date"])
+        d = decide(s["scores"], weights, o, decisive_thr)
+        comb[1] += 1
+        comb[0] += (d["side"] == actual)
+        key = "decisive" if d["basis"] == "overnight" else "flat"
+        seg[key][1] += 1
+        seg[key][0] += (d["side"] == actual)
+        ovs = _sign(o) if o is not None else 0
+        if ovs != 0:
+            aov[1] += 1
+            aov[0] += (ovs == actual)
+
+    def r(hn):
+        return {"win": round(hn[0] / hn[1], 4) if hn[1] else 0.0, "n": hn[1]}
+    return {"combined": r(comb), "decisive": r(seg["decisive"]),
+            "flat": r(seg["flat"]), "always_overnight": r(aov)}
+
+
+def oos(start: str, end: str, split: float = 0.7, rounds: int = 2,
+        decisive_thr: float = DECISIVE_THR, neutral: float = NEUTRAL) -> dict:
+    """視窗內 train/test：只在 train 校參+選權重，套決策規則到 held-out test。"""
+    import calibrate as cal
+    with tdb.connect() as conn:
+        feats, _ = bt.extract_features(conn, config.SYMBOL, start, end, neutral)
+        ov = {}
+        for f in feats:
+            us = tdb.us_asof(conn, "sox", f["date"])
+            ov[f["date"]] = us["change_pct"] if us and us.get("change_pct") is not None else None
+    k = int(len(feats) * split)
+    tr, te = feats[:k], feats[k:]
+    params, _ = cal.calibrate(tr, rounds)                 # 只在 train 校參
+    tr_s = bt.score_samples(tr, params)
+    res = bt.optimize(tr_s)
+    res, _ = bt.apply_guard(tr_s, res)
+    W = bt.pick_balanced(res, 0.0)["weights"]             # 只在 train 選權重
+    return {
+        "split": split, "n_train": len(tr), "n_test": len(te),
+        "train_window": [tr[0]["date"], tr[-1]["date"]] if tr else [],
+        "test_window": [te[0]["date"], te[-1]["date"]] if te else [],
+        "in_sample_train": _eval_rule(bt.score_samples(tr, params), W, ov, decisive_thr),
+        "out_of_sample_test": _eval_rule(bt.score_samples(te, params), W, ov, decisive_thr),
+    }
+
+
+def cross_year_overnight(decisive_thr: float = DECISIVE_THR, neutral: float = NEUTRAL) -> dict:
+    """跨年複核「決斷夜跟隔夜」核心：用 xs.db 2 年 2344 收盤 + 重抓 2 年 SOX，分年段算同日(全日)方向勝率。
+
+    僅驗證 weight-free 的隔夜核心（無 open 故不含開盤跳空、無 chips）；分 2024-07~2025-06 與 2025-07~2026-06。
+    """
+    import fetch_us
+    import xs_db
+    with xs_db.connect() as c:
+        rows = c.execute("SELECT date, close FROM xs_candles WHERE symbol = ? ORDER BY date",
+                         (config.SYMBOL,)).fetchall()
+    closes = [(r["date"], r["close"]) for r in rows if r["close"]]
+    rets = [(closes[i][0], (closes[i][1] - closes[i - 1][1]) / closes[i - 1][1] * 100.0)
+            for i in range(1, len(closes))]
+    sox = sorted((s["date"], s["change_pct"]) for s in fetch_us.fetch_yahoo_daily("^SOX", "2y")
+                 if s.get("change_pct") is not None)
+
+    def overnight_for(twdate: str):
+        v = None
+        for sd, pct in sox:
+            if sd < twdate:
+                v = pct
+            else:
+                break
+        return v
+
+    segs = {"2024-07~2025-06": ("2024-07-01", "2025-06-30"),
+            "2025-07~2026-06": ("2025-07-01", "2026-06-30")}
+    out = {}
+    for name, (s, e) in segs.items():
+        dec = [0, 0]
+        alld = [0, 0]
+        for d, ret in rets:
+            if not (s <= d <= e) or abs(ret) < neutral:
+                continue
+            o = overnight_for(d)
+            if o is None or o == 0:
+                continue
+            alld[1] += 1
+            alld[0] += ((o > 0) == (ret > 0))
+            if abs(o) >= decisive_thr:
+                dec[1] += 1
+                dec[0] += ((o > 0) == (ret > 0))
+        out[name] = {"decisive": {"win": round(dec[0] / dec[1], 4) if dec[1] else 0.0, "n": dec[1]},
+                     "all_overnight": {"win": round(alld[0] / alld[1], 4) if alld[1] else 0.0, "n": alld[1]}}
+    return out
+
+
 def main(argv):
     def opt(flag, d=None):
         return argv[argv.index(flag) + 1] if flag in argv else d
     start = opt("--start", "2025-07-01")
     end = opt("--end", config.today_str()[:4] + "-12-31")
     thr = float(opt("--thr", str(DECISIVE_THR)))
+    if "--cross-year" in argv:
+        cy = cross_year_overnight(thr)
+        print(f"[daily_decision 跨年] 決斷夜跟隔夜核心（全日方向，門檻 |SOX|>={thr}%）：")
+        for name, v in cy.items():
+            print(f"  {name}: 決斷夜 {v['decisive']['win']:.1%}(n={v['decisive']['n']})  "
+                  f"全隔夜 {v['all_overnight']['win']:.1%}(n={v['all_overnight']['n']})")
+        return
+    if "--oos" in argv:
+        o = oos(start, end, float(opt("--split", "0.7")), int(opt("--rounds", "2")), thr)
+        print(f"[daily_decision OOS] train {o['n_train']} 日 {o['train_window']} / "
+              f"test {o['n_test']} 日 {o['test_window']}  (split={o['split']})")
+        for tag, key in (("in-sample(train)", "in_sample_train"), ("OUT-OF-SAMPLE(test)", "out_of_sample_test")):
+            e = o[key]
+            print(f"  {tag}: 合併 {e['combined']['win']:.1%}(n={e['combined']['n']})  "
+                  f"決斷夜 {e['decisive']['win']:.1%}(n={e['decisive']['n']})  "
+                  f"平淡夜 {e['flat']['win']:.1%}(n={e['flat']['n']})  "
+                  f"全跟隔夜 {e['always_overnight']['win']:.1%}")
+        return
     r = analyze(start, end, thr)
     print(f"[daily_decision] {r['window'][0]}~{r['window'][1]}  {r['n_days']} 日  "
           f"決斷夜門檻 |SOX|>={thr}%  決斷夜占 {r['decisive_day_share']:.0%}")
