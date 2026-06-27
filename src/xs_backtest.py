@@ -16,6 +16,7 @@
     --composite：多因子複合（法人流 5 日 + 法人流 20 日 + 外資流 5 日，每日跨股 z-score 等權）。
     --tdcc：在複合再加 **TDCC 大戶週變化**（限有 TDCC 歷史的聚焦池）。
     --composite --tdcc-pool：3 因子但限同一聚焦池（與 --tdcc 公平對照）。
+    --long-only：加「純做多 top 分位 vs 個股等權整池（無 ETF）」可部署性分析（扣成本、各持有期）。
                  預設僅單因子（法人流 window 日）。
 """
 from __future__ import annotations
@@ -187,6 +188,69 @@ def cost_sweep(dates, sig, closes, vols, q, top, holds, cost):
     return out
 
 
+def long_only_sweep(dates, sig, closes, vols, q, top, holds, cost):
+    """純做多 top 分位（等權、每 hold 日換倉、扣成本）vs **個股等權整池** benchmark（無 ETF）。
+
+    benchmark = 當日可投資池（同 top 流動性篩選後）全部個股等權，代表「無腦等權買整池」基準。
+    回傳每個持有期：top 分位淨/毛累積、benchmark 累積、超額(淨−benchmark)、年化。
+    """
+    out = []
+    # benchmark 與持有期無關，先算一次（個股等權整池，buy-the-universe）
+    bench = 1.0
+    bdays = 0
+    for i in range(len(dates) - 1):
+        d, dn = dates[i], dates[i + 1]
+        rows = _eligible(sig, closes, vols, d, dn, top)
+        if len(rows) < 5:
+            continue
+        bench *= (1.0 + _mean([r[2] for r in rows]))
+        bdays += 1
+    bench_ann = bench ** (252.0 / bdays) - 1.0 if bdays else 0.0
+
+    for hold in holds:
+        L = None
+        gross = net = 1.0
+        tos = []
+        ndays = 0
+        for i in range(len(dates) - 1):
+            d, dn = dates[i], dates[i + 1]
+            rows = _eligible(sig, closes, vols, d, dn, top)
+            if len(rows) < 5:
+                continue
+            ndays += 1
+            retmap = {r[0]: r[2] for r in rows}
+            cost_today = 0.0
+            if L is None or i % hold == 0:
+                newL = set(xs.quantile_groups([(r[0], r[1]) for r in rows], q)[q - 1])
+                to = 1.0 if L is None else (len(newL - L) / len(newL) if newL else 0.0)
+                tos.append(to)
+                cost_today = to * cost / 100.0
+                L = newL
+            held = [retmap[s] for s in L if s in retmap]
+            lr = _mean(held) if held else 0.0
+            gross *= (1.0 + lr)
+            net *= (1.0 + lr - cost_today)
+        ann = net ** (252.0 / ndays) - 1.0 if ndays else 0.0
+        out.append({"hold": hold, "gross_cum": gross - 1.0, "net_cum": net - 1.0,
+                    "bench_cum": bench - 1.0, "excess_cum": net - bench,
+                    "ann_net": ann, "ann_bench": bench_ann, "avg_turnover": _mean(tos)})
+    return out
+
+
+def _eligible(sig, closes, vols, d, dn, top):
+    rows = []
+    for s in sig:
+        sv = sig.get(s, {}).get(d)
+        c0 = closes.get(s, {}).get(d)
+        c1 = closes.get(s, {}).get(dn)
+        if sv is None or not c0 or c1 is None:
+            continue
+        rows.append((s, sv, c1 / c0 - 1.0, vols.get(s, {}).get(d) or 0.0))
+    if top and len(rows) > top:
+        rows = sorted(rows, key=lambda r: r[3], reverse=True)[:top]
+    return rows
+
+
 def subperiods(daily, k):
     """把評估日等分 k 段，各段平均 IC 與多空毛累積（看是否單一 regime 運氣）。"""
     n = len(daily)
@@ -204,7 +268,7 @@ def subperiods(daily, k):
     return out
 
 
-def write_report(res, daily, costs, subs, cost, signal_label, path) -> None:
+def write_report(res, daily, costs, subs, cost, signal_label, path, longs=None) -> None:
     q = res["q"]
     lines = [
         f"# 橫斷面多股籌碼排序回測（{res['range'][0]} ~ {res['range'][1]}）",
@@ -247,6 +311,20 @@ def write_report(res, daily, costs, subs, cost, signal_label, path) -> None:
     for s in subs:
         lines.append(f"| {s['label']} | {s['n']} | {s['mean_ic']:.4f} | {s['ls_cum']:.2%} |")
 
+    if longs:
+        b = longs[0]["bench_cum"]
+        lines += [
+            "",
+            f"## 純做多 top 分位 vs 個股等權整池（無 ETF；成本 {cost:.2f}%/單位週轉）",
+            "> **可部署性**：選股（做多最高訊號分位）能否贏過「無腦等權買整池個股」基準（同流動性池、buy-and-hold、無成本）。",
+            f"- 基準（個股等權整池，毛）：累積 **{b:.2%}**　年化 **{longs[0]['ann_bench']:.2%}**",
+            "| 持有期(日) | 平均週轉 | top分位毛 | **top分位淨** | 年化淨 | **超額(淨−基準)** |",
+            "|---|---|---|---|---|---|",
+        ]
+        for c in longs:
+            lines.append(f"| {c['hold']} | {c['avg_turnover']:.2%} | {c['gross_cum']:.2%} | "
+                         f"**{c['net_cum']:.2%}** | {c['ann_net']:.2%} | **{c['excess_cum']:.2%}** |")
+
     lines += [
         "",
         "## 注意與限制",
@@ -288,16 +366,16 @@ def main(argv: list[str]) -> None:
     res, daily = run(dates, sig, closes, vols, q, top)
     costs = cost_sweep(dates, sig, closes, vols, q, top, holds, cost)
     subs = subperiods(daily, k)
+    longs = long_only_sweep(dates, sig, closes, vols, q, top, holds, cost) if "--long-only" in argv else None
 
     path = config.REPORTS_DIR / f"xs_backtest_{res['range'][0]}_{res['range'][1]}.md"
-    write_report(res, daily, costs, subs, cost, signal_label, path)
+    write_report(res, daily, costs, subs, cost, signal_label, path, longs)
     print(f"[xs_backtest] {signal_label}　股票池 {res['universe']} 檔、評估 {res['n_days']} 日、每日前 {top or '全部'} 檔")
     print(f"  平均 IC {res['mean_ic']:.4f}　IC_IR {res['ic_ir']:.3f}　IC>0 {res['pos_ic_ratio']:.2%}")
     print(f"  多空毛 平均日 {res['ls_mean_daily']:.4%}　累積 {res['ls_cumulative']:.2%}")
-    print(f"  成本{cost:.2f}% 下淨累積：" + "　".join(
-        f"持{c['hold']}日 {c['net_cum']:.1%}(週轉{c['avg_turnover']:.0%})" for c in costs))
-    print("  分期毛累積：" + "　".join(f"{s['label'][:7]}… IC{s['mean_ic']:.3f}/{s['ls_cum']:.0%}"
-                                       for s in subs))
+    if longs:
+        print(f"  純做多 vs 個股等權整池（基準累積 {longs[0]['bench_cum']:.1%}）：" + "　".join(
+            f"持{c['hold']}日 淨{c['net_cum']:.0%}/超額{c['excess_cum']:.0%}" for c in longs))
     print(f"  -> {path}")
 
 
