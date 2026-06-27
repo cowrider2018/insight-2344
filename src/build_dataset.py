@@ -14,6 +14,7 @@ import fetch_tdcc
 import fetch_twse
 import fetch_us
 import scrape_cmoney
+import swing_risk
 
 
 def build() -> dict:
@@ -87,6 +88,14 @@ def build() -> dict:
         futures = None
     status["taifex"] = "ok" if futures else "partial"
 
+    # --- 隔日衝/早盤被殺風險（盤前 6:00 用昨晚費半條件估今日開盤/全日機率）---
+    try:
+        sox_pct = (overnight.get("sox") or {}).get("change_pct")
+        swing = swing_risk.estimate(overnight_pct=sox_pct)
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"swing_risk 例外: {e}")
+        swing = None
+
     dataset = {
         "symbol": config.SYMBOL,
         "name": fg.get("name", config.NAME),
@@ -103,6 +112,7 @@ def build() -> dict:
         "branch": branch,                     # 第八面：主力分點（供累積）
         "holders": holders or {},             # 第九面：TDCC 千張大戶（當週，供累積）
         "futures": futures or {},             # 第十面：外資台指期未平倉（D-1，供累積）
+        "swing_risk": swing or {},            # 盤前：今日早盤被殺/噴出機率（昨晚費半條件）
         "source_status": status,
     }
     return dataset
@@ -119,6 +129,12 @@ def main():
           f"branch={len(dataset.get('branch', {}).get('rows', []))} "
           f"holders={'y' if dataset.get('holders') else 'n'} "
           f"futures={'y' if dataset.get('futures') else 'n'} trading_date={dataset['trading_date']}")
+    sw = dataset.get("swing_risk") or {}
+    if sw and not sw.get("error") and sw.get("today_prob"):
+        tp = sw["today_prob"]
+        print(f"  早盤被殺風險: 昨晚SOX {sw.get('overnight_sox_pct')}% -> {sw.get('overnight_bucket')}情境"
+              f"  開盤殺>=2% {tp[2.0]['open_down']:.0%}  全日收黑>=2% {tp[2.0]['day_down']:.0%}"
+              f"  開高>=2% {tp[2.0]['open_up']:.0%}")
     if s["warnings"]:
         print("  warnings:")
         for w in s["warnings"]:
