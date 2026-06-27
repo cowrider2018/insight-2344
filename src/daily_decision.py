@@ -229,6 +229,55 @@ def flat_night_diagnostics(start: str, end: str, decisive_thr: float = DECISIVE_
     return {"n_flat_moving": len(flat), "signals": rows}
 
 
+def divergence_analysis(neutral: float = NEUTRAL) -> dict:
+    """測「隔夜美股 vs 大盤外資資金流向」背離日：四象限 2344 次日方向，看背離時誰主導。
+
+    隔夜=費半 signed（盤前已知）；外資=全市場三大法人外資買賣超合計（D-1 盤後，盤前已知）；
+    四象限 (sign 隔夜, sign 外資)：++同向偏多、+-(美股漲/外資賣=東買西賣)、-+(美股跌/外資買)、--同向偏空。
+    每象限：n、2344 次日上漲率、以隔夜為預測子命中率、以外資為預測子命中率。用 xs.db 2 年。
+    """
+    import fetch_us
+    import xs_db
+    with xs_db.connect() as c:
+        mf = {r[0]: r[1] for r in c.execute(
+            "SELECT date, SUM(foreign_net) FROM xs_chips GROUP BY date").fetchall() if r[1] is not None}
+        crows = c.execute("SELECT date, close FROM xs_candles WHERE symbol = ? ORDER BY date",
+                          (config.SYMBOL,)).fetchall()
+    closes = [(r[0], r[1]) for r in crows if r[1]]
+    ret = {closes[i][0]: (closes[i][1] - closes[i - 1][1]) / closes[i - 1][1] * 100.0
+           for i in range(1, len(closes))}
+    sox = sorted((s["date"], s["change_pct"]) for s in fetch_us.fetch_yahoo_daily("^SOX", "2y")
+                 if s.get("change_pct") is not None)
+    mf_dates = sorted(mf)
+
+    def asof(seq_dates, getter, d):
+        v = None
+        for sd in seq_dates:
+            if sd < d:
+                v = getter(sd)
+            else:
+                break
+        return v
+
+    sox_dates = [x[0] for x in sox]
+    sox_map = dict(sox)
+    quad = {}
+    for d in (c[0] for c in closes):
+        if d not in ret or abs(ret[d]) < neutral:
+            continue
+        ov = asof(sox_dates, lambda x: sox_map[x], d)
+        ff = asof(mf_dates, lambda x: mf[x], d)
+        if not ov or not ff:
+            continue
+        a = 1 if ret[d] > 0 else -1
+        q = quad.setdefault((_sign(ov), _sign(ff)), [0, 0, 0, 0])
+        q[0] += 1
+        q[1] += (a > 0)
+        q[2] += (_sign(ov) == a)
+        q[3] += (_sign(ff) == a)
+    return quad
+
+
 def cross_year_overnight(decisive_thr: float = DECISIVE_THR, neutral: float = NEUTRAL) -> dict:
     """跨年複核「決斷夜跟隔夜」核心：用 xs.db 2 年 2344 收盤 + 重抓 2 年 SOX，分年段算同日(全日)方向勝率。
 
@@ -282,6 +331,19 @@ def main(argv):
     start = opt("--start", "2025-07-01")
     end = opt("--end", config.today_str()[:4] + "-12-31")
     thr = float(opt("--thr", str(DECISIVE_THR)))
+    if "--divergence" in argv:
+        q = divergence_analysis()
+        lab = {(1, 1): "美股漲+外資買(同向多)", (1, -1): "美股漲+外資賣(東買西賣)",
+               (-1, 1): "美股跌+外資買", (-1, -1): "美股跌+外資賣(同向空)"}
+        print("[背離分析] 隔夜費半 × 大盤外資買賣超 → 2344 次日（移動日）：")
+        for k in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
+            v = q.get(k)
+            if not v or v[0] == 0:
+                continue
+            n, up, wov, wff = v
+            print(f"  {lab[k]:<22} n={n:>3}  2344上漲率 {up/n:.0%}  "
+                  f"跟隔夜命中 {wov/n:.0%}  跟外資命中 {wff/n:.0%}")
+        return
     if "--flat-diag" in argv:
         r = flat_night_diagnostics(start, end, thr)
         print(f"[平淡夜逐訊號] |SOX|<{thr}% 的移動日 {r['n_flat_moving']} 天，同日方向命中率：")
