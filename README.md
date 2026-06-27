@@ -9,6 +9,9 @@
   - 勝率實證（2344, 241 日，方向性、中性帶±1%）：十面模型全表態同日收盤 **~60%（天花板）**；**改以隔夜美股決斷度選日**——
     昨晚費半 **|≥1%| 同日全日命中 71%、開盤 90%**；**|≥2% 決斷夜 全日 72%、開盤 94%**（各約覆蓋半數/三成交易日）。
     → **67% 目標靠「只在決斷夜重押、平淡夜降信心」達成**（`swing_risk.py --accuracy` 可複算）。
+- **每日選邊決策（`src/daily_decision.py`）**：每天一定選一邊＋信心分級——決斷夜跟隔夜(信心高)、平淡夜用十面 composite(信心中/低)。
+  回測同日方向勝率（移動日全覆蓋）：**合併 68.0%**（決斷夜 71.2%、平淡夜 62.0%；對照全跟隔夜 62.4%）。**達 67% 目標且每天有訊息**
+  （近一年、模型部分含 in-sample 成分，宜定期 OOS 複核）。
 - **回測 / 權重優化**：`src/scoring.py` + `src/backtest.py` → `data/weights.json`（六面權重 + 中性門檻）
 - **參數校準**：`src/calibrate.py` → `data/score_params.json`；**消息型態驗證**：`src/validate_news.py` → `data/news_patterns.json`
 - **分析（Claude）**：技能 `/cmoney-2344-daily` 讀 JSON + weights → `reports/2344_YYYYMMDD.md`
