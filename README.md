@@ -5,7 +5,10 @@
 ## 分工
 - **標準化抓取（決定性腳本）**：`src/build_dataset.py` → `data/2344_YYYYMMDD.json`
 - **時間軸累積**：`src/timeline_db.py`（SQLite `data/market.db`）+ `src/ingest.py`，`build_dataset.py` 每日自動攝取
-- **極短線盤前風險**：`src/swing_risk.py` → 以**昨晚費半方向**條件化的今日**早盤被殺/噴出機率**（開盤跳空 ≤−θ / ≥θ、全日收黑/紅），供 06:00 隔日沖判「今天會不會被殺」；併入 `data/2344_*.json` 的 `swing_risk`
+- **極短線盤前風險**：`src/swing_risk.py` → 以**昨晚費半方向**條件化的今日**早盤被殺/噴出機率**（開盤跳空 ≤−θ / ≥θ、全日收黑/紅）＋**決斷度與同日方向歷史勝率**，供 06:00 隔日沖判「今天會不會被殺、該不該重押」；併入 `data/2344_*.json` 的 `swing_risk`
+  - 勝率實證（2344, 241 日，方向性、中性帶±1%）：十面模型全表態同日收盤 **~60%（天花板）**；**改以隔夜美股決斷度選日**——
+    昨晚費半 **|≥1%| 同日全日命中 71%、開盤 90%**；**|≥2% 決斷夜 全日 72%、開盤 94%**（各約覆蓋半數/三成交易日）。
+    → **67% 目標靠「只在決斷夜重押、平淡夜降信心」達成**（`swing_risk.py --accuracy` 可複算）。
 - **回測 / 權重優化**：`src/scoring.py` + `src/backtest.py` → `data/weights.json`（六面權重 + 中性門檻）
 - **參數校準**：`src/calibrate.py` → `data/score_params.json`；**消息型態驗證**：`src/validate_news.py` → `data/news_patterns.json`
 - **分析（Claude）**：技能 `/cmoney-2344-daily` 讀 JSON + weights → `reports/2344_YYYYMMDD.md`

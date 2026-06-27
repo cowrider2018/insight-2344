@@ -109,6 +109,12 @@ def estimate(overnight_pct: float | None = None, thresholds=DEFAULT_THRESHOLDS, 
             ov = overnight_pct
         bk = _bucket(ov)
         cur_vol = _std([s["day_move"] for s in samples[-VOL_WINDOW:] if s["day_move"] is not None])
+        # 決斷度 → 該情境同日方向歷史命中率（朝 67% 的可達路徑）
+        acc = accuracy(conn=conn)
+        absov = abs(ov) if ov is not None else 0.0
+        thr = 2.0 if absov >= 2.0 else (1.0 if absov >= 1.0 else 0.0)
+        conviction = "決斷" if thr == 2.0 else ("中度" if thr == 1.0 else "平淡")
+        tier = acc.get(f"昨晚費半|≥{thr}%", {})
         return {
             "symbol": config.SYMBOL,
             "as_of_date": samples[-1]["date"],
@@ -117,10 +123,45 @@ def estimate(overnight_pct: float | None = None, thresholds=DEFAULT_THRESHOLDS, 
             "overnight_bucket": bk,
             "current_vol_10d": round(cur_vol, 3),
             "today_prob": table.get(bk) if bk else table["全部"],   # 採昨晚情境（被殺機率主依據）
+            "conviction": conviction,                                # 決斷/中度/平淡（由 |昨晚費半| 分層）
+            "dir_winrate": tier,                                     # 該決斷度的同日方向歷史命中（開盤/全日 + 涵蓋）
             "by_overnight": table,
             "n_samples": len(samples),
-            "note": "open_down=開盤下殺機率(被殺)、day_down=全日收黑機率；avg_*=該情境平均跳空/全日方向傾向",
+            "note": "open_down=開盤下殺機率(被殺)、day_down=全日收黑機率；conviction 高(決斷)時同日方向命中率較高(見 dir_winrate)",
         }
+
+    if conn is not None:
+        return _do(conn)
+    with tdb.connect() as c:
+        return _do(c)
+
+
+def accuracy(neutral: float = 1.0, conn=None) -> dict:
+    """以昨晚費半 signed 方向為預測子，量測同日「開盤」與「全日」方向命中率與涵蓋率。
+
+    方向性命中：只計實際 |變動| ≥ neutral 的日子（過濾中性日）。依「決斷度」分層
+    （|昨晚費半| ≥ 0/1/2%）——決斷度高的日子，同日方向更易命中（朝 67% 的現實路徑）。
+    """
+    def _do(conn):
+        samples = [s for s in _build_samples(conn, config.SYMBOL) if s["overnight"] is not None]
+
+        def wr(use: str, thr_pred: float):
+            n = hit = 0
+            for s in samples:
+                if abs(s["overnight"]) < thr_pred:
+                    continue
+                actual = s["day_move"] if use == "day" else s["open_gap"]
+                if actual is None or abs(actual) < neutral:
+                    continue
+                n += 1
+                hit += (s["overnight"] > 0) == (actual > 0)
+            return {"win": round(hit / n, 4) if n else 0.0, "n": n,
+                    "cov": round(n / len(samples), 3) if samples else 0.0}
+
+        out = {"total_days": len(samples), "neutral_band": neutral}
+        for thr in (0.0, 1.0, 2.0):
+            out[f"昨晚費半|≥{thr}%"] = {"開盤方向": wr("open", thr), "全日方向": wr("day", thr)}
+        return out
 
     if conn is not None:
         return _do(conn)
@@ -131,5 +172,8 @@ def estimate(overnight_pct: float | None = None, thresholds=DEFAULT_THRESHOLDS, 
 if __name__ == "__main__":
     import json
     import sys
-    ov = float(sys.argv[1]) if len(sys.argv) > 1 else None   # 可帶昨晚費半漲跌%
-    print(json.dumps(estimate(ov), ensure_ascii=False, indent=2))
+    if "--accuracy" in sys.argv:
+        print(json.dumps(accuracy(), ensure_ascii=False, indent=2))
+    else:
+        ov = float(sys.argv[1]) if len(sys.argv) > 1 else None   # 可帶昨晚費半漲跌%
+        print(json.dumps(estimate(ov), ensure_ascii=False, indent=2))
