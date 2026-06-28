@@ -164,8 +164,16 @@ def build(start: str | None = None, end: str | None = None, quick: bool = False)
     if not start:
         print("[builder] 無日 K，請先 --backfill")
         return {}
+    # 泛用化：選該股最佳隔夜驅動並套用到 regime 閘門與 swing_risk（不再寫死費半）
+    import overnight_driver
+    drv = overnight_driver.select_best(config.SYMBOL)
+    swing_risk.US_KEY = drv["best"]
+    dd.OVERNIGHT_KEY = drv["best"]
+    print(f"[builder] {config.SYMBOL} 最佳隔夜驅動：{drv['best']}（corr {drv['corr']}）")
     print(f"[builder] 評估 {config.SYMBOL} {config.NAME}  {start}~{end} ...")
     ev = evaluate(start, end, quick)
+    if not ev.get("error"):
+        ev["overnight_driver"] = drv
     if ev.get("error"):
         print("[builder]", ev["error"])
         return ev

@@ -17,8 +17,9 @@ import config
 import scoring
 import timeline_db as tdb
 
-DECISIVE_THR = 1.0     # |昨晚費半%| ≥ 此值 = 決斷夜
+DECISIVE_THR = 1.0     # |隔夜驅動%| ≥ 此值 = 決斷夜
 NEUTRAL = 1.0          # 實際漲跌中性帶（方向性命中只計 |move|≥此值的日子）
+OVERNIGHT_KEY = "sox"  # 隔夜驅動的 us_market 鍵（可由 strategy_builder 依該股最佳驅動覆寫）
 
 
 def _load_weights() -> tuple[dict, float]:
@@ -87,7 +88,7 @@ def analyze(start: str, end: str, decisive_thr: float = DECISIVE_THR,
         samples = bt.score_samples(feats)
         ov = {}
         for f in feats:
-            us = tdb.us_asof(conn, "sox", f["date"])
+            us = tdb.us_asof(conn, OVERNIGHT_KEY, f["date"])
             ov[f["date"]] = us["change_pct"] if us and us.get("change_pct") is not None else None
 
     seg = {"decisive": [0, 0], "flat": [0, 0]}     # [hit, n_directional]
@@ -169,7 +170,7 @@ def oos(start: str, end: str, split: float = 0.7, rounds: int = 2,
         feats, _ = bt.extract_features(conn, config.SYMBOL, start, end, neutral)
         ov = {}
         for f in feats:
-            us = tdb.us_asof(conn, "sox", f["date"])
+            us = tdb.us_asof(conn, OVERNIGHT_KEY, f["date"])
             ov[f["date"]] = us["change_pct"] if us and us.get("change_pct") is not None else None
     k = int(len(feats) * split)
     tr, te = feats[:k], feats[k:]
@@ -198,7 +199,7 @@ def flat_night_diagnostics(start: str, end: str, decisive_thr: float = DECISIVE_
         samples = bt.score_samples(feats)
         ov = {}
         for f in feats:
-            us = tdb.us_asof(conn, "sox", f["date"])
+            us = tdb.us_asof(conn, OVERNIGHT_KEY, f["date"])
             ov[f["date"]] = us["change_pct"] if us and us.get("change_pct") is not None else None
     flat = [s for s in samples
             if (ov.get(s["date"]) is None or abs(ov[s["date"]]) < decisive_thr) and s["actual"] != 0]

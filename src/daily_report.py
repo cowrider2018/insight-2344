@@ -22,9 +22,16 @@ def _load_strategy() -> dict | None:
     return None
 
 
+_DRIVER_ZH = {"sox": "費半", "smh": "半導體ETF", "soxx": "費半ETF", "mu": "美光",
+              "tsm": "台積ADR", "nvda": "NVDA", "amd": "AMD"}
+
+
 def generate(date_str: str | None = None) -> str:
     strat = _load_strategy()
-    sw = swing_risk.estimate()                      # 今日盤前（DB 最新隔夜）
+    drv = (strat or {}).get("overnight_driver", {}).get("best", "sox")
+    swing_risk.US_KEY = drv                          # 套用該股最佳隔夜驅動
+    dname = _DRIVER_ZH.get(drv, drv.upper())
+    sw = swing_risk.estimate()                      # 今日盤前（DB 最新隔夜驅動）
     sym, name = config.SYMBOL, config.NAME
     date = date_str or config.today_str()
     dstr = f"{date[:4]}-{date[4:6]}-{date[6:]}"
@@ -54,7 +61,7 @@ def generate(date_str: str | None = None) -> str:
         "",
         "## ⚡ 一行決策",
         (f"【{stance}】{side}・{'高信心' if decisive else '低信心(保守)'}"
-         f" ─ 昨晚費半 {ov:+.2f}%（{sw.get('overnight_bucket')}/{sw.get('conviction')}夜）。"),
+         f" ─ 昨晚{dname} {ov:+.2f}%（{sw.get('overnight_bucket')}/{sw.get('conviction')}夜）。"),
         (f"預期同日勝率：決斷夜全日 {dw.get('全日方向',{}).get('win',0):.0%}／開盤 {dw.get('開盤方向',{}).get('win',0):.0%}"
          if decisive else
          f"平淡夜屬低信心情境（該股 {('籌碼可參考' if stype=='chip_alpha_available' else '~擲幣，宜縮量')}）。"),
