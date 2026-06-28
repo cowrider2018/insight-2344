@@ -2,6 +2,33 @@
 
 每天上午 06:00 自動抓取**十面**標準化資料（技術 / 基本 / 籌碼 / 消息 / 美光 / 費半 / 日內 1 分 K / 主力分點 / TDCC 千張大戶 / 外資台指期未平倉），由 Claude 依回測最佳權重做當日盤前走勢研判，產出報告並 email。
 
+---
+
+# 🏭 通用個股策略框架（兩步驟）
+
+本專案已通用化：任一上市股都能跑。以環境變數 `STOCK_SYMBOL` 切換標的（預設 2344），每股獨立狀態收於
+`data/<symbol>/`、報告於 `reports/<symbol>/`；`market.db` / `xs.db` 共用（已含 symbol 欄）。2344 為內建範例。
+
+**Step 1 — 策略建置（`strategy_builder.py`）**：對一支股票把所有方法跑一遍，以 **OOS** 挑最高勝率的可部署規則、
+判定該股屬「隔夜美股 beta 主導」或「籌碼/個股 alpha 可用」型，寫成專屬 `data/<symbol>/strategy.json`。
+```powershell
+build_stock.bat 2330 台積電          # = STOCK_SYMBOL=2330 python src\strategy_builder.py --full
+# 或分步：--backfill（回補全部資料）→ --calibrate（校準十面權重）→ --build（跑方法電池、寫 strategy.json）
+```
+方法電池：十面評分＋顯著性護欄、信心分層、隔夜決斷度勝率（swing_risk）、每日選邊 regime 切換＋OOS／跨年複核、
+外資背離（東買西賣）、平淡夜逐訊號。挑選以 OOS 為準（避免過擬合）。
+
+**Step 2 — 排程分析（`daily_report.py`）**：每日盤前讀該股 `strategy.json` ＋ 今日資料，輸出固定格式**決策卡**
+（重押/保守 ＋ 多空 ＋ 早盤被殺機率 ＋ 預期勝率）。
+```powershell
+daily_stock.bat 2344                 # = STOCK_SYMBOL=2344 python src\build_dataset.py + daily_report.py
+```
+
+> 範例（2344，自動分型）：`overnight_beta_dominated`；決斷夜跟隔夜美股、重押（OOS 同日 ~67–72%），平淡夜保守（~54%）。
+> 不同股票若籌碼面有獨立 edge（平淡夜 OOS≥55%），會被分型為 `chip_alpha_available`、平淡夜改用籌碼訊號選邊。
+
+---
+
 ## 分工
 - **標準化抓取（決定性腳本）**：`src/build_dataset.py` → `data/2344_YYYYMMDD.json`
 - **時間軸累積**：`src/timeline_db.py`（SQLite `data/market.db`）+ `src/ingest.py`，`build_dataset.py` 每日自動攝取
