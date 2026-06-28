@@ -89,7 +89,7 @@ def ingest_dataset(dataset: dict, conn=None) -> dict:
 def backfill_from_json() -> dict:
     tdb.init_db()
     total = {"files": 0, "news": 0, "chips": 0, "revenue": 0, "candles": 0, "us": 0}
-    files = sorted(config.DATA_DIR.glob(f"{config.SYMBOL}_*.json"))
+    files = sorted(config.SYMBOL_DIR.glob(f"{config.SYMBOL}_*.json"))
     with tdb.connect() as conn:
         for f in files:
             try:

@@ -67,7 +67,7 @@ DEFAULT_PARAMS: dict = {
 def load_params() -> dict:
     """回傳 DEFAULT_PARAMS 疊加 data/score_params.json（若存在）。"""
     p = dict(DEFAULT_PARAMS)
-    f = config.DATA_DIR / "score_params.json"
+    f = config.score_params_path()
     if f.exists():
         try:
             p.update(json.loads(f.read_text(encoding="utf-8")))
@@ -206,7 +206,7 @@ def _load_branch_polarity() -> dict:
 
     回傳 {branch: {"polarity": +1/-1/0}}；不存在則空（smart 子訊號不作用）。
     """
-    f = config.DATA_DIR / "branch_polarity.json"
+    f = config.branch_polarity_path()
     if f.exists():
         try:
             data = json.loads(f.read_text(encoding="utf-8"))

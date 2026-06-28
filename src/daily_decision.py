@@ -22,7 +22,7 @@ NEUTRAL = 1.0          # 實際漲跌中性帶（方向性命中只計 |move|≥
 
 
 def _load_weights() -> tuple[dict, float]:
-    f = config.DATA_DIR / "weights.json"
+    f = config.weights_path()
     if f.exists():
         w = json.loads(f.read_text(encoding="utf-8"))
         return w["weights"], w.get("neutral_threshold", 0.15)

@@ -560,12 +560,12 @@ def main(argv: list[str]) -> None:
                                       for k in ("conf_hi", "conf_mid", "conf_mag_full",
                                                 "w_conf_mag", "w_conf_agree", "w_conf_chip")},
                        "tiers": conf_tiers},
-        "score_params_file": "data/score_params.json",
+        "score_params_file": str(config.score_params_path()),
     }
-    weights_path = config.DATA_DIR / "weights.json"
+    weights_path = config.weights_path()
     weights_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    report_path = config.REPORTS_DIR / f"backtest_{start}_{end}.md"
+    report_path = config.SYMBOL_REPORTS_DIR / f"backtest_{start}_{end}.md"
     write_report(samples, coverage, results, start, end, tol, report_path, balanced,
                  diagnostics, conf_tiers)
 

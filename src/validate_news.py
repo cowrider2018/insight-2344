@@ -125,7 +125,7 @@ def main(argv: list[str]) -> None:
         "base_up_rate": base_rate, "min_dir_n": min_n, "alpha": alpha,
         "patterns": patterns,
     }
-    pfile = config.DATA_DIR / "news_patterns.json"
+    pfile = config.news_patterns_path()
     pfile.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
     report = config.REPORTS_DIR / "news_patterns.md"
     write_report(patterns, base_rate, len(feats), report)

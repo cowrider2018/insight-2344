@@ -11,9 +11,11 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-# ---- 標的 ----
-SYMBOL = "2344"
-NAME = "華邦電"
+# ---- 標的（通用：由環境變數 STOCK_SYMBOL 指定，預設 2344）----
+# 策略建置/排程皆以此為當前標的；切換股票只需設 STOCK_SYMBOL=XXXX。
+_KNOWN_NAMES = {"2344": "華邦電"}
+SYMBOL = (os.getenv("STOCK_SYMBOL") or "2344").strip()
+NAME = (os.getenv("STOCK_NAME") or _KNOWN_NAMES.get(SYMBOL) or SYMBOL).strip()
 
 # ---- 時區 ----
 TZ = timezone(timedelta(hours=8))  # Asia/Taipei
@@ -28,19 +30,48 @@ def today_str() -> str:
 
 
 # ---- 路徑 ----
+# 共用（多 symbol，DB 已含 symbol 欄）：market.db / xs.db 放 DATA_DIR 根。
+# 每股獨立狀態（weights/score_params/strategy/news/branch/每日快照）放 DATA_DIR/<symbol>/。
 DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "reports"
 LOGS_DIR = ROOT / "logs"
-for _d in (DATA_DIR, REPORTS_DIR, LOGS_DIR):
-    _d.mkdir(exist_ok=True)
+SYMBOL_DIR = DATA_DIR / SYMBOL                 # 當前標的的專屬資料夾
+SYMBOL_REPORTS_DIR = REPORTS_DIR / SYMBOL      # 當前標的的專屬報告夾
+for _d in (DATA_DIR, REPORTS_DIR, LOGS_DIR, SYMBOL_DIR, SYMBOL_REPORTS_DIR):
+    _d.mkdir(exist_ok=True, parents=True)
 
 
 def data_path(date_str: str | None = None) -> Path:
-    return DATA_DIR / f"{SYMBOL}_{date_str or today_str()}.json"
+    return SYMBOL_DIR / f"{SYMBOL}_{date_str or today_str()}.json"
 
 
 def report_path(date_str: str | None = None) -> Path:
-    return REPORTS_DIR / f"{SYMBOL}_{date_str or today_str()}.md"
+    return SYMBOL_REPORTS_DIR / f"{SYMBOL}_{date_str or today_str()}.md"
+
+
+# 每股專屬狀態檔（集中管理，模組一律用這些而非自拼路徑）
+def weights_path() -> Path:
+    return SYMBOL_DIR / "weights.json"
+
+
+def score_params_path() -> Path:
+    return SYMBOL_DIR / "score_params.json"
+
+
+def strategy_path() -> Path:
+    return SYMBOL_DIR / "strategy.json"
+
+
+def news_patterns_path() -> Path:
+    return SYMBOL_DIR / "news_patterns.json"
+
+
+def branch_profiles_path() -> Path:
+    return SYMBOL_DIR / "branch_profiles.json"
+
+
+def branch_polarity_path() -> Path:
+    return SYMBOL_DIR / "branch_polarity.json"
 
 
 # ---- 金鑰 / 來源設定 ----

@@ -107,9 +107,9 @@ def main(argv: list[str]) -> None:
         "branches": polarity_map(validated),     # scoring 載入用（只留已驗證）
         "detail": validated,                      # 完整統計（供檢視）
     }
-    pfile = config.DATA_DIR / "branch_polarity.json"
+    pfile = config.branch_polarity_path()
     pfile.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-    report = config.REPORTS_DIR / "branch_polarity.md"
+    report = config.SYMBOL_REPORTS_DIR / "branch_polarity.md"
     write_report(validated, len(feats), report)
 
     n_val = sum(1 for v in validated.values() if v["polarity"])

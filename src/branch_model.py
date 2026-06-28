@@ -160,9 +160,9 @@ def main(argv: list[str]) -> None:
         "min_obs": min_obs, "K": k, "min_hist": min_hist,
         "n_scores": len(scores), "branches": prof,
     }
-    pfile = config.DATA_DIR / "branch_profiles.json"
+    pfile = config.branch_profiles_path()
     pfile.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-    report = config.REPORTS_DIR / "branch_profiles.md"
+    report = config.SYMBOL_REPORTS_DIR / "branch_profiles.md"
     write_report(prof, len(scores), report)
 
     nz = [s["score"] for s in scores if s["score"]]

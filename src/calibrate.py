@@ -130,7 +130,7 @@ def main(argv: list[str]) -> None:
         print("  " + line)
 
     # 寫回參數
-    pfile = config.DATA_DIR / "score_params.json"
+    pfile = config.score_params_path()
     pfile.write_text(json.dumps(params, ensure_ascii=False, indent=2), encoding="utf-8")
     scoring.PARAMS = params  # 使後續以調適後參數評分
 
@@ -169,11 +169,11 @@ def main(argv: list[str]) -> None:
                                       for k in ("conf_hi", "conf_mid", "conf_mag_full",
                                                 "w_conf_mag", "w_conf_agree", "w_conf_chip")},
                        "tiers": conf_tiers},
-        "score_params_file": "data/score_params.json",
+        "score_params_file": str(config.score_params_path()),
     }
-    (config.DATA_DIR / "weights.json").write_text(
+    config.weights_path().write_text(
         json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-    report_path = config.REPORTS_DIR / f"backtest_{start}_{end}.md"
+    report_path = config.SYMBOL_REPORTS_DIR / f"backtest_{start}_{end}.md"
     bt.write_report(samples, coverage, results, start, end, tol, report_path, balanced,
                     diagnostics, conf_tiers)
 
@@ -181,7 +181,7 @@ def main(argv: list[str]) -> None:
     print("  平衡權重 " + "/".join(f"{bt._DIM_ZH[d]}{balanced['weights'][d]:.1f}"
                                   for d in scoring.DIMENSIONS) + f"  tau={balanced['tau']}")
     print(f"  -> {pfile}")
-    print(f"  -> {config.DATA_DIR / 'weights.json'}")
+    print(f"  -> {config.weights_path()}")
     print(f"  -> {report_path}")
 
 

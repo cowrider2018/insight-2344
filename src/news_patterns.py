@@ -76,7 +76,7 @@ def match(title: str | None) -> list[str]:
 
 def load_validated() -> dict:
     """載入 data/news_patterns.json（validate_news.py 產生）。無則回空 dict。"""
-    f = config.DATA_DIR / "news_patterns.json"
+    f = config.news_patterns_path()
     if not f.exists():
         return {}
     try:
