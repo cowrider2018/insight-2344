@@ -144,11 +144,13 @@ def choose(ev: dict) -> dict:
 
     flat_action = ("平淡夜可用籌碼訊號選邊（該股籌碼面有 edge）"
                    if chip_useful else "平淡夜保守/縮量（無獨立 edge，~擲幣）")
+    drv = ev.get("overnight_driver", {}).get("best", "sox")
     return {
         "type": stock_type,
         "basis": basis,
         "decisive_thr": dd.DECISIVE_THR,
-        "rule": "決斷夜（|隔夜費半|≥1%）跟隔夜美股方向、重押；" + flat_action,
+        "overnight_driver": drv,
+        "rule": f"決斷夜（|隔夜驅動 {drv}|≥1%）跟該驅動方向、重押；" + flat_action,
         "expected_winrate": {"combined": round(comb, 4), "decisive_night": round(dec, 4),
                              "flat_night": round(flat, 4)},
         "rationale": (f"決斷夜 {dec:.0%}、平淡夜 {flat:.0%}、合併 {comb:.0%}（{basis}）；"
