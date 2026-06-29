@@ -93,6 +93,9 @@ def evaluate(start: str, end: str, quick: bool = False) -> dict:
     # 3) 隔夜決斷度同日方向勝率（開盤/全日）
     out["overnight_accuracy"] = swing_risk.accuracy()
 
+    # 3.5) 門檻×視窗(開盤/全日)掃描：每股最佳決斷門檻與交易視窗（含基準率校正＋OOS）
+    out["threshold_horizon"] = swing_risk.scan_threshold_horizon()
+
     # 4) 外資背離（東買西賣）測試（tuple key 轉可序列化字串）
     try:
         dv = dd.divergence_analysis()
@@ -145,12 +148,23 @@ def choose(ev: dict) -> dict:
     flat_action = ("平淡夜可用籌碼訊號選邊（該股籌碼面有 edge）"
                    if chip_useful else "平淡夜保守/縮量（無獨立 edge，~擲幣）")
     drv = ev.get("overnight_driver", {}).get("best", "sox")
+    th = ev.get("threshold_horizon", {}).get("recommend", {})
+    rec_thr = th.get("thr", dd.DECISIVE_THR)
+    horizon = th.get("horizon", "day")
+    win_window = "全日" if horizon == "day" else "開盤跳空"
     return {
         "type": stock_type,
         "basis": basis,
-        "decisive_thr": dd.DECISIVE_THR,
+        "decisive_thr": rec_thr,
         "overnight_driver": drv,
-        "rule": f"決斷夜（|隔夜驅動 {drv}|≥1%）跟該驅動方向、重押；" + flat_action,
+        "trade_window": horizon,                # day=全日 / open=賺開盤跳空
+        "window_winrate_oos": th.get("win_test"),
+        "open_vs_day_oos": {"open": th.get("open_win_test"), "day": th.get("day_win_test")},
+        "open_asymmetry": {"up_driver_open_up": th.get("open_up_rate"),
+                           "down_driver_open_down": th.get("open_down_rate"),
+                           "base_open_up": ev.get("threshold_horizon", {}).get("base_open_up_rate")},
+        "rule": (f"決斷夜（|{drv}|≥{rec_thr}%）跟驅動方向、重押，交易視窗＝**{win_window}**"
+                 f"（OOS {th.get('win_test',0):.0%}）；" + flat_action),
         "expected_winrate": {"combined": round(comb, 4), "decisive_night": round(dec, 4),
                              "flat_night": round(flat, 4)},
         "rationale": (f"決斷夜 {dec:.0%}、平淡夜 {flat:.0%}、合併 {comb:.0%}（{basis}）；"

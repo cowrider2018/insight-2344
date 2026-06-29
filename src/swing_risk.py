@@ -145,6 +145,82 @@ def estimate(overnight_pct: float | None = None, thresholds=DEFAULT_THRESHOLDS, 
         return _do(c)
 
 
+def _mean(xs) -> float:
+    xs = list(xs)
+    return sum(xs) / len(xs) if xs else 0.0
+
+
+def scan_threshold_horizon(symbol: str | None = None, thresholds=(0.5, 1.0, 1.5, 2.0),
+                           split: float = 0.7, neutral: float = 1.0, conn=None) -> dict:
+    """每股最佳「決斷門檻 × 交易視窗(開盤/全日)」掃描，含**基準率校正**與 **OOS**。
+
+    用當前 US_KEY 隔夜驅動。對每個門檻 thr：決斷夜跟驅動方向，分別量「全日」與「開盤跳空」方向命中
+    （train/test 切分→OOS），並報開盤的無條件基準率與上/下驅動的開高/開低率（揭露天生漂移與不對稱）。
+    建議：以 train 挑門檻、test 報 OOS；視窗取 OOS 較高者。
+    """
+    def _do(conn):
+        S = [s for s in _build_samples(conn, symbol or config.SYMBOL) if s["overnight"] is not None]
+        ogs = [s["open_gap"] for s in S if s["open_gap"] is not None]
+        base_open_up = _mean(g > 0 for g in ogs)
+        rows = []
+        for thr in thresholds:
+            dec = [s for s in S if abs(s["overnight"]) >= thr]
+            k = int(len(dec) * split)
+            tr, te = dec[:k], dec[k:]
+
+            def win(sams, field):
+                w = [(s["overnight"] > 0) == (s[field] > 0) for s in sams
+                     if s[field] is not None and abs(s[field]) >= neutral]
+                return (round(_mean(w), 4), len(w)) if w else (0.0, 0)
+
+            up = [s for s in dec if s["overnight"] > 0 and s["open_gap"] is not None]
+            dn = [s for s in dec if s["overnight"] < 0 and s["open_gap"] is not None]
+            dwt, dnt = win(tr, "day_move"), win(te, "day_move")
+            owt, ont = win(tr, "open_gap"), win(te, "open_gap")
+            rows.append({
+                "thr": thr, "coverage": round(len(dec) / len(S), 3) if S else 0.0,
+                "day_win_train": dwt[0], "day_win_test": dnt[0], "day_n_test": dnt[1],
+                "open_win_train": owt[0], "open_win_test": ont[0], "open_n_test": ont[1],
+                "open_up_rate": round(_mean(s["open_gap"] > 0 for s in up), 4),
+                "open_down_rate": round(_mean(s["open_gap"] < 0 for s in dn), 4),
+            })
+        # 穩健挑選：要求該視窗 test 樣本 ≥ min_n（避免小樣本高分過擬合，如 n=10 的 100%）；
+        # 以 train 勝率挑門檻（不偷看 test）、同分偏好高涵蓋。
+        min_n = 20
+
+        def chosen_h(r):
+            o_ok, d_ok = r["open_n_test"] >= min_n, r["day_n_test"] >= min_n
+            if o_ok and r["open_win_test"] > r["day_win_test"]:
+                return "open", r["open_win_test"]
+            if d_ok:
+                return "day", r["day_win_test"]
+            return ("open", r["open_win_test"]) if o_ok else ("day", r["day_win_test"])
+
+        elig = [r for r in rows if r["open_n_test"] >= min_n or r["day_n_test"] >= min_n] or rows
+
+        def train_win(r):
+            return r["open_win_train"] if chosen_h(r)[0] == "open" else r["day_win_train"]
+
+        best = max(elig, key=lambda r: (round(train_win(r), 2), r["coverage"]))
+        horizon, _ = chosen_h(best)
+        return {
+            "driver": US_KEY, "n": len(S), "base_open_up_rate": round(base_open_up, 4),
+            "base_open_down_rate": round(1 - base_open_up, 4), "scan": rows,
+            "recommend": {
+                "thr": best["thr"], "horizon": horizon,
+                "win_test": best["open_win_test"] if horizon == "open" else best["day_win_test"],
+                "open_win_test": best["open_win_test"], "day_win_test": best["day_win_test"],
+                "open_up_rate": best["open_up_rate"], "open_down_rate": best["open_down_rate"],
+                "note": ("開盤視窗：上驅動做多較強、下驅動做空較弱（不對稱），且已扣基準漂移後仍有提升"),
+            },
+        }
+
+    if conn is not None:
+        return _do(conn)
+    with tdb.connect() as c:
+        return _do(c)
+
+
 def accuracy(neutral: float = 1.0, conn=None) -> dict:
     """以昨晚費半 signed 方向為預測子，量測同日「開盤」與「全日」方向命中率與涵蓋率。
 

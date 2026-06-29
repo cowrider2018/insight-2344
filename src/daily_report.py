@@ -73,8 +73,14 @@ def generate(date_str: str | None = None) -> str:
         f"- 平均開盤跳空 {tp.get('avg_open_gap')}%　平均全日 {tp.get('avg_day_move')}%",
         "",
         "## 策略依據",
-        f"- 該股類型：{stype}",
+        f"- 該股類型：{stype}　隔夜驅動：{cs.get('overnight_driver', drv)}（{dname}）",
         f"- 規則：{cs.get('rule','(未建立)')}",
+        (f"- 交易視窗：**{'賺開盤跳空' if cs.get('trade_window')=='open' else '全日'}**"
+         f"（OOS {cs.get('window_winrate_oos') or 0:.0%}）"
+         + (f"；開盤不對稱：上驅動開高 {cs['open_asymmetry'].get('up_driver_open_up') or 0:.0%}／"
+            f"下驅動開低 {cs['open_asymmetry'].get('down_driver_open_down') or 0:.0%}"
+            f"（基準開高 {cs['open_asymmetry'].get('base_open_up') or 0:.0%}，故做多側較強、做空側較弱）"
+            if cs.get('trade_window') == 'open' and cs.get('open_asymmetry') else "")),
         (f"- 回測勝率（{cs.get('basis','-')}）：合併 {ew.get('combined',0):.0%}／決斷夜 {ew.get('decisive_night',0):.0%}"
          f"／平淡夜 {ew.get('flat_night',0):.0%}" if ew else "- （尚無 strategy.json，請先 strategy_builder --build）"),
         "",
