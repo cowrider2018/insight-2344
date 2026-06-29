@@ -73,6 +73,65 @@ def _stats(rows: list[dict]) -> dict:
     return out
 
 
+def intraday_path(overnight_pct: float | None = None, min_n: int = 15, conn=None) -> dict:
+    """用 1 分 K 補「盤中時序」：當前驅動情境下，開盤後 30 分走勢、低/高點時點、是否先殺後拉。
+
+    1 分 K 僅近數月（Fugle 保留期），分情境後樣本小 -> 回傳 n，呼叫端據 n 決定是否顯示（小樣本標註）。
+    """
+    def _do(conn):
+        rows = conn.execute(
+            "SELECT date, time, open, close, high, low FROM candles_1min "
+            "WHERE symbol=? ORDER BY date, time", (config.SYMBOL,)).fetchall()
+        if not rows:
+            return {"n": 0}
+        from collections import defaultdict
+        days = defaultdict(list)
+        for r in rows:
+            days[r["date"]].append(r)
+        dc = {r["date"]: r["close"] for r in
+              conn.execute("SELECT date, close FROM candles WHERE symbol=?", (config.SYMBOL,))}
+        dk = sorted(dc)
+        import bisect
+        ov = overnight_pct
+        if ov is None:
+            us = tdb.us_asof(conn, swing_risk.US_KEY, "9999-12-31")
+            ov = us["change_pct"] if us and us.get("change_pct") is not None else None
+        bucket = swing_risk._bucket(ov)
+        e30, lowm, highm, lowfirst, recover, gapn = [], [], [], 0, 0, 0
+        for d, b in days.items():
+            if len(b) < 60:
+                continue
+            i = bisect.bisect_left(dk, d)
+            pc = dc[dk[i - 1]] if i > 0 else None
+            us = tdb.us_asof(conn, swing_risk.US_KEY, d)
+            if not pc or not us or swing_risk._bucket(us.get("change_pct")) != bucket:
+                continue
+            op = b[0]["open"]
+            li = min(range(len(b)), key=lambda k: b[k]["low"])
+            hi = max(range(len(b)), key=lambda k: b[k]["high"])
+            e30.append((b[min(29, len(b) - 1)]["close"] - op) / op * 100)
+            lowm.append(li)
+            highm.append(hi)
+            lowfirst += (li < hi)
+            if (op - pc) / pc < 0:
+                gapn += 1
+                recover += (b[-1]["close"] > op)
+        n = len(e30)
+        if n == 0:
+            return {"n": 0, "bucket": bucket}
+        return {"n": n, "bucket": bucket, "driver": swing_risk.US_KEY,
+                "early30_avg": round(sum(e30) / n, 2),
+                "low_min_avg": round(sum(lowm) / n), "high_min_avg": round(sum(highm) / n),
+                "low_before_high_pct": round(lowfirst / n, 3),
+                "gap_down_recover_pct": round(recover / gapn, 3) if gapn else None,
+                "enough": n >= min_n}
+
+    if conn is not None:
+        return _do(conn)
+    with tdb.connect() as c:
+        return _do(c)
+
+
 def playbook(overnight_pct: float | None = None, conn=None) -> dict:
     """回傳今日劇本：採昨晚驅動所屬情境（不足則用全部）的歷史條件機率。"""
     def _do(conn):

@@ -135,6 +135,16 @@ def generate(date_str: str | None = None) -> str:
             f"- 路徑：開高走高 {pa['開高走高']:.0%}｜開高走低 {pa['開高走低']:.0%}｜"
             f"開低走高 {pa['開低走高']:.0%}｜開低走低 {pa['開低走低']:.0%}",
         ]
+        ip = scenario.intraday_path(ov)
+        if ip.get("n") and ip.get("enough"):
+            lines.append(
+                f"- 盤中時序(1分K,近月,n={ip['n']})：開盤後30分均 {ip['early30_avg']:+.2f}%"
+                f"｜低點均第{ip['low_min_avg']}分／高點第{ip['high_min_avg']}分"
+                f"｜先觸低再觸高 {ip['low_before_high_pct']:.0%}"
+                + (f"｜開低後收>開 {ip['gap_down_recover_pct']:.0%}" if ip.get("gap_down_recover_pct") is not None else "")
+                + " ＝跳空後盤中偏震盪、勿追開盤瞬間")
+        elif ip.get("n"):
+            lines.append(f"- 盤中時序(1分K)：此情境僅 n={ip['n']} 天（1分K保留期短），樣本不足、暫不提供時序")
 
     lines += ["", "本卡為公開資訊彙整分析，非投資建議，據此操作風險自負。"]
     card = "\n".join(lines)
