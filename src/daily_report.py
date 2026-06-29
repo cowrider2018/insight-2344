@@ -9,7 +9,34 @@ from __future__ import annotations
 import json
 
 import config
+import indicators
+import scenario
+import scoring
 import swing_risk
+import timeline_db as tdb
+
+
+def _sgn(x):
+    return 1 if (x or 0) > 0 else (-1 if (x or 0) < 0 else 0)
+
+
+def _contradiction(driver_sign: int) -> tuple[int, list[str]]:
+    """今日(盤前 as-of) {均線, RSI, 分點} 與隔夜驅動方向矛盾的數目（重壓濾網用）。
+
+    OOS 顯示：決斷夜若 ≥2 個非隔夜指標與驅動反向，跟驅動較易失準（68%→76% 但少做~40%日），
+    故據此把『重押』降為『標準』（只調部位、不改方向；n 偏小、屬中等可信）。
+    """
+    with tdb.connect() as conn:
+        candles = tdb.candles_upto(conn, config.SYMBOL)
+        if not candles:
+            return 0, []
+        tsig = scoring.technical_signals(indicators.compute_all(candles), candles[-1]["close"])
+        brows = tdb.branches_asof(conn, config.SYMBOL, "9999-12-31")
+        wf = tdb.branch_wf_asof(conn, config.SYMBOL, "9999-12-31")
+        br = _sgn(scoring.score_branch(brows, wf_score=(wf or {}).get("score"))) if brows else 0
+    sigs = {"均線": _sgn(tsig.get("ma")), "RSI": _sgn(tsig.get("rsi")), "分點": br}
+    against = [k for k, v in sigs.items() if v != 0 and v != driver_sign]
+    return len(against), against
 
 
 def _load_strategy() -> dict | None:
@@ -49,6 +76,15 @@ def generate(date_str: str | None = None) -> str:
     side = "偏多" if (ov or 0) > 0 else ("偏空" if (ov or 0) < 0 else "中性")
     decisive = stance == "重押"
 
+    # 重壓濾網：決斷夜若 ≥2 非隔夜指標與驅動矛盾 -> 降為標準量（不改方向）
+    filter_note = ""
+    if decisive:
+        nc, against = _contradiction(_sgn(ov))
+        if nc >= 2:
+            stance = "標準"
+            decisive = False
+            filter_note = f"（重壓濾網：{ '、'.join(against) } 與驅動矛盾 {nc} 項 → 降為標準量）"
+
     cs = (strat or {}).get("chosen_strategy", {})
     ew = cs.get("expected_winrate", {})
     stype = cs.get("type", "（尚未建立策略，請先 strategy_builder --build）")
@@ -61,7 +97,7 @@ def generate(date_str: str | None = None) -> str:
         "",
         "## ⚡ 一行決策",
         (f"【{stance}】{side}・{'高信心' if decisive else '低信心(保守)'}"
-         f" ─ 昨晚{dname} {ov:+.2f}%（{sw.get('overnight_bucket')}/{sw.get('conviction')}夜）。"),
+         f" ─ 昨晚{dname} {ov:+.2f}%（{sw.get('overnight_bucket')}/{sw.get('conviction')}夜）。{filter_note}"),
         (f"預期同日勝率：決斷夜全日 {dw.get('全日方向',{}).get('win',0):.0%}／開盤 {dw.get('開盤方向',{}).get('win',0):.0%}"
          if decisive else
          f"平淡夜屬低信心情境（該股 {('籌碼可參考' if stype=='chip_alpha_available' else '~擲幣，宜縮量')}）。"),
@@ -83,9 +119,24 @@ def generate(date_str: str | None = None) -> str:
             if cs.get('trade_window') == 'open' and cs.get('open_asymmetry') else "")),
         (f"- 回測勝率（{cs.get('basis','-')}）：合併 {ew.get('combined',0):.0%}／決斷夜 {ew.get('decisive_night',0):.0%}"
          f"／平淡夜 {ew.get('flat_night',0):.0%}" if ew else "- （尚無 strategy.json，請先 strategy_builder --build）"),
-        "",
-        "本卡為公開資訊彙整分析，非投資建議，據此操作風險自負。",
     ]
+
+    # 今日劇本機率（描述性條件分布；昨晚驅動所屬情境）
+    pb = scenario.playbook(ov)
+    if not pb.get("error"):
+        o, rg, cl_, pa = pb["open"], pb["range"], pb["close"], pb["paths"]
+        lines += [
+            "",
+            f"## 今日劇本機率（{pb['bucket']}情境・{pb['scope']}・n={pb['n']}）",
+            f"- 開盤：平均跳空 {o['avg_gap']}%｜開高≥2% {o['up']['ge2.0']:.0%}｜開低≥2% {o['down']['ge2.0']:.0%}",
+            f"- 盤中震盪：平均振幅 {rg['avg']}%｜振幅≥3% {rg['prob']['ge3.0']:.0%}｜≥5% {rg['prob']['ge5.0']:.0%}"
+            f"｜開盤後平均上影 {rg['avg_hi_ext']}%／下殺 {rg['avg_lo_ext']}%",
+            f"- 收盤：收紅 {cl_['up_vs_prev']:.0%}｜收在開盤之上 {cl_['above_open']:.0%}｜收在日高半部 {cl_['upper_half']:.0%}",
+            f"- 路徑：開高走高 {pa['開高走高']:.0%}｜開高走低 {pa['開高走低']:.0%}｜"
+            f"開低走高 {pa['開低走高']:.0%}｜開低走低 {pa['開低走低']:.0%}",
+        ]
+
+    lines += ["", "本卡為公開資訊彙整分析，非投資建議，據此操作風險自負。"]
     card = "\n".join(lines)
     config.report_path(date).write_text(card, encoding="utf-8")
     return card
