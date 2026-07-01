@@ -25,6 +25,7 @@ import timeline_db as tdb
 NEUTRAL_TOL = 1.0          # 實際漲跌中性帶 ±%
 TAU_GRID = [0.05, 0.10, 0.15, 0.20, 0.25]
 WEIGHT_STEP = 10           # 0.1 解析度（compositions of 10）
+NEWS_FLOOR = 0.1           # 消息面總權重下限：回測選出的權重不含消息面時強制保底並重正規化
 
 
 # ---------- 工具 ----------
@@ -244,6 +245,20 @@ def pick_balanced(results: list[dict], tol: float = 0.0) -> dict:
     return min(near, key=lambda r: (_balance(r["weights"]), -r["win_rate"]))
 
 
+def restrict_news_floor(results: list[dict], floor: float = NEWS_FLOOR) -> list[dict]:
+    """新策略權重建置法：只保留消息面總權重 >= floor 的方案（總和仍=1），再交由護欄/挑選。
+
+    理念：消息面為策略指定必納面（樣本雖少但實戰關鍵），直接以「約束」在 news≥floor 的
+    權重搭配中挑最高命中率者來決策——而非事後強塞、也不加額外否決層，讓消息面的貢獻可被
+    回測直接衡量。消息面內部各型態的方向強度由 scoring 依（已驗證 edge 優先／否則專家先驗）
+    加權成單一 [-1,1] 分數，再乘上此總權重（非切割權重）。floor<=0 可停用此約束。
+    """
+    if floor <= 0:
+        return results
+    kept = [r for r in results if r["weights"].get("news", 0.0) >= floor - 1e-9]
+    return kept or results
+
+
 def _binom_two_sided_p(k: int, n: int, p: float) -> float:
     """Binom(n,p) 下「機率不高於 k 結果」之總機率（雙尾近似）；與 validate_news 同法。"""
     if n == 0:
@@ -288,8 +303,9 @@ def apply_guard(samples: list[dict], results: list[dict],
     這同時擋住第七面 30 日小樣本與消息/基本面低覆蓋的運氣灌水，確保 240 筆公平比較。
     """
     elig = eligible_dims(samples, min_n, alpha)
+    # 技術面為基準面恆合格；消息面為策略指定必納面（下限 news_floor，不受顯著性歸零）故亦豁免。
     blocked = [d for d in scoring.DIMENSIONS
-               if d != "technical" and not elig[d]["significant"]]
+               if d not in ("technical", "news") and not elig[d]["significant"]]
     if blocked:
         kept = [r for r in results
                 if all(r["weights"].get(d, 0.0) == 0.0 for d in blocked)]
@@ -519,6 +535,7 @@ def main(argv: list[str]) -> None:
     end = opt("--end", config.today_str()[:4] + "-12-31")
     tol = float(opt("--tol", str(NEUTRAL_TOL)))
     balance_tol = float(opt("--balance-tol", "0.0"))  # 命中率第一優先：預設 0=不為平衡犧牲命中率
+    news_floor = float(opt("--news-floor", str(NEWS_FLOOR)))  # 消息面總權重下限（0 可停用）
 
     tdb.init_db()
     with tdb.connect() as conn:
@@ -529,9 +546,10 @@ def main(argv: list[str]) -> None:
         return
 
     results = optimize(samples)
-    results, guard = apply_guard(samples, results)   # 顯著性護欄（含第七面）
+    results = restrict_news_floor(results, news_floor)  # 約束：只在 news≥floor 的搭配中選（消息面必納）
+    results, guard = apply_guard(samples, results)   # 顯著性護欄（技術/消息面豁免）
     best = results[0]
-    balanced = pick_balanced(results, balance_tol)   # 實際採用：更平衡的權重
+    balanced = pick_balanced(results, balance_tol)   # 實際採用：news≥floor 中最高命中、同分取均衡
     diagnostics = signal_diagnostics(samples)
     conf_tiers = confidence_diagnostics(samples, balanced["weights"], balanced["tau"])
 
@@ -547,6 +565,7 @@ def main(argv: list[str]) -> None:
         "window": [start, end],
         "actual_neutral_tol_pct": tol,
         "balance_tol": balance_tol,
+        "news_floor": news_floor,           # 消息面總權重下限（約束選出的方案 news≥此值）
         "raw_best": {"weights": best["weights"], "tau": best["tau"], "win_rate": best["win_rate"]},
         "coverage": coverage,
         "blocked_dims": guard["blocked"],
@@ -576,6 +595,7 @@ def main(argv: list[str]) -> None:
     print(f"  平衡(採用) 命中率 {balanced['win_rate']:.2%}  權重 "
           + "/".join(f"{_DIM_ZH[d]}{balanced['weights'][d]:.1f}" for d in scoring.DIMENSIONS)
           + f"  tau={balanced['tau']}")
+    print(f"  消息面約束：於 news≥{news_floor} 的權重搭配中選最佳（採用 news={balanced['weights']['news']:.1f}）")
     print(f"  -> {weights_path}")
     print(f"  -> {report_path}")
 

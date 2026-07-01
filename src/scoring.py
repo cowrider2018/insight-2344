@@ -220,18 +220,30 @@ def _load_branch_polarity() -> dict:
 BRANCH_POLARITY: dict = _load_branch_polarity()
 
 
+def _pattern_strength(name: str) -> float:
+    """單一消息型態的方向強度 [-1,1]（暫用直覺判斷）。
+
+    edge 子權重組合暫時取消（該窗 regime 偏多、實測 edge 把壞消息算成偏多、不可信）。
+    改：① 已統計驗證極性最優先；② 否則用專家先驗 PRIOR_EDGE（直覺，如券商調升=反向偏空）。
+    """
+    v = NEWS_PATTERNS.get(name)
+    if v and v.get("validated") and v.get("polarity"):
+        return v["polarity"] * min(abs(v.get("edge", 0.0)) * 2.0, 1.0)
+    e = news_patterns.PRIOR_EDGE.get(name)
+    if e:
+        return (1 if e > 0 else -1) * min(abs(e) * 2.0, 1.0)
+    return 0.0
+
+
 def _score_news_validated(news_list: list[dict], p: dict) -> float | None:
-    """以「已驗證型態極性」評分；無任何已驗證型態命中則回 None（交回退邏輯）。"""
-    if not NEWS_PATTERNS:
-        return None
+    """以「各類消息獨立權重」（已驗證極性優先，否則專家先驗）評分；無型態命中回 None。"""
     s = 0.0
     matched = 0
     for it in news_list:
         for name in news_patterns.match(it.get("title", "")):
-            v = NEWS_PATTERNS.get(name)
-            if v and v.get("polarity"):
-                # 以 edge 幅度轉換為強度（反直覺型態 edge 為負，polarity 已含方向）
-                s += v["polarity"] * min(abs(v.get("edge", 0.0)) * 2.0, 1.0)
+            st = _pattern_strength(name)
+            if st:
+                s += st
                 matched += 1
     if matched == 0:
         return None
@@ -242,7 +254,7 @@ def score_news(news_list: list[dict], params: dict | None = None) -> float:
     p = params or PARAMS
     if not news_list:
         return 0.0
-    # 1) 優先用獨立驗證過的型態極性（含反直覺：利多出盡等）
+    # 1) 各類消息獨立權重（已驗證極性優先，否則專家先驗，含反直覺利多出盡/倒貨）
     v = _score_news_validated(news_list, p)
     if v is not None:
         return v

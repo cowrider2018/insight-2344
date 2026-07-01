@@ -64,6 +64,25 @@ PATTERNS: dict = {
 }
 
 
+# 專家先驗極性（validate_news 尚未統計驗證前的備援；正=偏多、負=偏空/反向）。
+# 值為 signed edge：sign=方向、|值|=強度（0~0.5，強度 = min(|edge|*2,1)，0.5→滿格 1.0）。
+# 反直覺型態（券商/外資調升目標價常見利多出盡＋倒貨）給「強反向」——此為策略核心先驗。
+# 已統計驗證的型態（news_patterns.json validated=true）之極性優先於此先驗（見 scoring）。
+PRIOR_EDGE: dict[str, float] = {
+    "broker_target_up":   -0.50,   # 旗艦反向：調升目標價常倒貨/利多出盡 → 強偏空
+    "broker_target_down": -0.15,   # 直覺偏空（弱先驗）
+    "limit_up":           +0.15,
+    "limit_down":         -0.30,
+    "memory_crash":       -0.50,   # 記憶體急殺 → 強偏空
+    "dram_price_up":      +0.30,
+    "foreign_sell":       -0.30,   # 外資賣超/倒貨 → 偏空
+    "foreign_buy":        +0.30,
+    "earnings_beat":      +0.30,
+    "earnings_miss":      -0.35,
+    "us_chip_selloff":    -0.40,   # 隔夜費半/美股重挫 → 偏空
+}
+
+
 def match(title: str | None) -> list[str]:
     """回傳 title 命中的所有型態名稱。"""
     t = title or ""
