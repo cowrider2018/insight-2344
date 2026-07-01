@@ -61,13 +61,20 @@ try {
     & $claude -p "/cmoney-2344-daily" --permission-mode acceptEdits --add-dir $proj 2>&1 | Tee-Object -FilePath $log -Append
     if ($LASTEXITCODE -ne 0) { Log "warn: claude 回傳非零 exit ($LASTEXITCODE)，仍嘗試寄出現有報告" }
 
+    # 報告路徑容錯：headless Claude 可能寫頂層 reports\ 或 symbol 子目錄 reports\2344\
+    # （後者為 config.report_path 決策卡位置）。頂層優先，退回子目錄，用先找到的。
     $report = Join-Path $proj "reports\2344_$today.md"
+    if (-not (Test-Path $report)) {
+        $alt = Join-Path $proj "reports\2344\2344_$today.md"
+        if (Test-Path $alt) { $report = $alt }
+    }
     if (-not (Test-Path $report)) { throw "找不到報告 $report（Claude 分析未產生輸出）" }
+    Log "報告位置: $report"
 
-    # 3) 寄信
+    # 3) 寄信（非致命：未設定 Gmail OAuth 或寄信失敗時只記警告，報告已產生仍算完成）
     Log "Step3 send_email"
     & $py (Join-Path $proj "src\send_email.py") $report 2>&1 | Tee-Object -FilePath $log -Append
-    if ($LASTEXITCODE -ne 0) { throw "send_email 失敗 (exit $LASTEXITCODE)" }
+    if ($LASTEXITCODE -ne 0) { Log "warn: send_email 失敗 (exit $LASTEXITCODE)，跳過寄信；報告已產生於 $report" }
 
     Log "==== 完成 ===="
 }
