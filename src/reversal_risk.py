@@ -107,6 +107,116 @@ def assess(symbol: str | None = None) -> dict:
     return out
 
 
+def _components(symbol: str):
+    """回傳 (D, closes, 三個原始分量 dict rel/sell/stk)；供 assess 與 backtest 共用邏輯。"""
+    with xs_db.connect() as conn:
+        closes, flows, vols, dates = xs_db.load_panel(conn)
+        ff = xs_db.load_foreign_flows(conn)
+        rows = conn.execute(
+            "SELECT date, foreign_net FROM xs_chips WHERE symbol=? ORDER BY date",
+            (symbol,)).fetchall()
+    fnet = {r["date"]: r["foreign_net"] for r in rows if r["foreign_net"] is not None}
+    D = [d for d in dates if d in closes.get(symbol, {})]
+    comp = xs.composite([xs.smoothed_flow(flows, D, 1), xs.smoothed_flow(ff, D, 1)], D)
+    rel = {}
+    for d in D:
+        mem = {s: comp[s][d] for s in universe.SYMBOLS if s in comp and d in comp[s]}
+        if symbol in mem and len(mem) >= 5:
+            rel[d] = -xs.zscore_map(mem)[symbol]
+    ff5 = xs.smoothed_flow(ff, D, 5).get(symbol, {})
+    sell = {d: -(ff5[d]) for d in D if d in ff5}
+    stk = {}
+    for i, d in enumerate(D):
+        n = 0
+        for j in range(i, -1, -1):
+            x = fnet.get(D[j])
+            if x is None or x >= 0:
+                break
+            n += 1
+        stk[d] = n
+    return D, closes, rel, sell, stk
+
+
+def backtest(symbol: str | None = None, warmup: int = 60, horizons=(1, 5)) -> dict:
+    """walk-forward 回測：每日僅以『過去』資料標準化三分量並相加成風險分數 B，評估其對前瞻
+    報酬的預測（無 look-ahead）。高 B＝空方共振強；若有效，B 與前瞻報酬應**負相關**、
+    高分位桶前瞻報酬偏低。回傳 IC 與分位桶統計。
+    """
+    symbol = symbol or config.SYMBOL
+    D, closes, rel, sell, stk = _components(symbol)
+    order = [d for d in D if d in rel and d in sell and d in stk]
+    # 各分量以『擴張窗（僅過去）』標準化：維護 running mean/var
+    def running_z(series):
+        z = {}
+        n = s = ss = 0.0
+        for d in order:
+            if n >= warmup:
+                mu = s / n
+                var = max(ss / n - mu * mu, 1e-12)
+                z[d] = (series[d] - mu) / var ** 0.5
+            x = series[d]
+            n += 1
+            s += x
+            ss += x * x
+        return z
+    zr, zs_, zk = running_z(rel), running_z(sell), running_z(stk)
+    B = {d: zr[d] + zs_[d] + zk[d] for d in order if d in zr and d in zs_ and d in zk}
+    idx = {d: i for i, d in enumerate(D)}
+
+    def fwd(d, h):
+        i = idx[d]
+        if i + h >= len(D):
+            return None
+        a, b = closes[symbol].get(D[i]), closes[symbol].get(D[i + h])
+        return (b / a - 1) if (a and b) else None
+
+    evald = [d for d in B]
+    out = {"symbol": symbol, "warmup": warmup, "n_eval": len(evald),
+           "range": [evald[0], evald[-1]] if evald else None, "horizons": {}}
+    for h in horizons:
+        pairs = [(B[d], fwd(d, h)) for d in evald if fwd(d, h) is not None]
+        bs = [p[0] for p in pairs]
+        rs = [p[1] for p in pairs]
+        ic = xs.spearman(bs, rs)
+        # 五分位（依 B 由低到高）
+        srt = sorted(pairs, key=lambda p: p[0])
+        q = 5
+        buckets = []
+        for g in range(q):
+            seg = srt[g * len(srt) // q:(g + 1) * len(srt) // q]
+            rr = [p[1] for p in seg]
+            buckets.append({"mean": sum(rr) / len(rr) if rr else 0.0,
+                            "down_rate": sum(1 for x in rr if x < 0) / len(rr) if rr else 0.0,
+                            "n": len(rr)})
+        # 極端層：B 前 10%（極度危險近似）
+        k = max(1, len(srt) // 10)
+        top = [p[1] for p in srt[-k:]]
+        out["horizons"][h] = {
+            "ic": round(ic, 4) if ic is not None else None,
+            "buckets": buckets,
+            "extreme_top10pct": {"mean": round(sum(top) / len(top), 4), "n": len(top),
+                                 "down_rate": round(sum(1 for x in top if x < 0) / len(top), 3)},
+        }
+    return out
+
+
+def _print_backtest(res: dict) -> None:
+    print(f"[reversal_risk backtest] {res['symbol']}  評估 {res['n_eval']} 日"
+          f"（{res['range'][0]}~{res['range'][1]}，warmup {res['warmup']}，walk-forward 無 look-ahead）")
+    for h, r in res["horizons"].items():
+        print(f"\n== 持有 {h} 日 ==  IC(B vs 前瞻報酬,應為負)={r['ic']}")
+        print(f"{'B五分位(低→高空方)':<18}{'前瞻均%':>9}{'下跌率':>8}{'n':>5}")
+        for g, b in enumerate(r["buckets"]):
+            lab = ["Q1最買", "Q2", "Q3", "Q4", "Q5最空"][g]
+            print(f"{lab:<18}{b['mean']*100:>9.2f}{b['down_rate']*100:>7.0f}%{b['n']:>5}")
+        e = r["extreme_top10pct"]
+        print(f"  極端(B前10%≈極度危險): 前瞻均 {e['mean']*100:.2f}%  下跌率 {e['down_rate']:.0%}  n={e['n']}")
+
+
 if __name__ == "__main__":
-    import json
-    print(json.dumps(assess(), ensure_ascii=False, indent=2))
+    import sys
+    if "--backtest" in sys.argv:
+        _print_backtest(backtest())
+    else:
+        import json
+        print(json.dumps(assess(), ensure_ascii=False, indent=2))
