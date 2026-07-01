@@ -177,6 +177,21 @@ def backfill(start: str | None = None, end: str | None = None,
     return tot
 
 
+def refresh_daily(window_days: int = 60) -> dict:
+    """每日管線用：把 xs.db 補到最新交易日（全市場，供 peer + market 兩池橫斷面分數）。
+
+    薄包裝 backfill(all_market=True)：交易日清單沿用 market.db 的 2344 日 K，回補最近
+    window_days 個交易日。**skip-done 冪等**——首次跑自動 bootstrap ~一季（供近期 IC 樣本），
+    之後每日只抓最新 1 天（其餘已存跳過，約 2 次全市場 HTTP + 1 次 TDCC CSV）。
+    """
+    with tdb.connect() as mc:
+        all_dates = [r["date"] for r in tdb.candles_upto(mc, config.SYMBOL)]
+    if not all_dates:
+        return {"error": "market.db 無 2344 日 K"}
+    start = all_dates[max(0, len(all_dates) - window_days)]
+    return backfill(start, all_dates[-1], all_market=True)
+
+
 def _weekdays(start: str, end: str):
     from datetime import date, timedelta
     cur = date(*(int(x) for x in start.split("-")))

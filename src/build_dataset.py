@@ -88,6 +88,17 @@ def build() -> dict:
         futures = None
     status["taifex"] = "ok" if futures else "partial"
 
+    # --- 橫斷面籌碼分數（先把 xs.db 補到昨日，再算 2344 跨股相對強度，第十一面）---
+    try:
+        import xs_ingest
+        import xs_score
+        xs_ingest.refresh_daily()                 # 全市場增量、skip-done 冪等
+        xs_cs = xs_score.cross_section_score()
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"xs_score 例外: {e}")
+        xs_cs = {"error": str(e)}
+    status["xs"] = "ok" if not xs_cs.get("error") else "partial"
+
     # --- 隔日衝/早盤被殺風險（盤前 6:00 用昨晚費半條件估今日開盤/全日機率）---
     try:
         sox_pct = (overnight.get("sox") or {}).get("change_pct")
@@ -112,6 +123,7 @@ def build() -> dict:
         "branch": branch,                     # 第八面：主力分點（供累積）
         "holders": holders or {},             # 第九面：TDCC 千張大戶（當週，供累積）
         "futures": futures or {},             # 第十面：外資台指期未平倉（D-1，供累積）
+        "xs_score": xs_cs,                     # 第十一面：橫斷面籌碼分數（跨股相對強度）
         "swing_risk": swing or {},            # 盤前：今日早盤被殺/噴出機率（昨晚費半條件）
         "source_status": status,
     }
@@ -129,6 +141,16 @@ def main():
           f"branch={len(dataset.get('branch', {}).get('rows', []))} "
           f"holders={'y' if dataset.get('holders') else 'n'} "
           f"futures={'y' if dataset.get('futures') else 'n'} trading_date={dataset['trading_date']}")
+    xc = dataset.get("xs_score") or {}
+    if xc and not xc.get("error"):
+        def _ps(p):
+            d = xc.get("pools", {}).get(p, {})
+            return (f"{p} z{d.get('z'):+}/第{d.get('quintile')}分位/IC{d.get('recent_ic'):+.3f}[{d.get('state')}]"
+                    if not d.get("error") else f"{p}不足")
+        print(f"  橫斷面籌碼(as-of {xc.get('as_of')}): {_ps('peer')}  {_ps('market')}")
+    elif xc.get("error"):
+        print(f"  橫斷面籌碼: 略過（{xc['error']}）")
+
     sw = dataset.get("swing_risk") or {}
     if sw and not sw.get("error") and sw.get("today_prob"):
         tp = sw["today_prob"]
