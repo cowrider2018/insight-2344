@@ -11,6 +11,7 @@ import json
 import config
 import indicators
 import reversal_risk
+import risk_off
 import scenario
 import scoring
 import swing_risk
@@ -68,6 +69,9 @@ def _load_strategy() -> dict | None:
 _DRIVER_ZH = {"sox": "費半", "smh": "半導體ETF", "soxx": "費半ETF", "mu": "美光",
               "tsm": "台積ADR", "nvda": "NVDA", "amd": "AMD"}
 
+_REGIME_ZH = {"memory_rotation": "記憶體族群輪出", "broad_risk_off": "總體risk-off",
+              "normal": "外資單檔重賣", "unknown": "情境不明"}
+
 
 def generate(date_str: str | None = None) -> str:
     strat = _load_strategy()
@@ -88,8 +92,15 @@ def generate(date_str: str | None = None) -> str:
     tp = sw.get("today_prob", {})
     dw = sw.get("dir_winrate", {})
     # 方向軸：決斷夜跟隔夜方向、信心高；平淡夜低信心
-    side = "偏多" if (ov or 0) > 0 else ("偏空" if (ov or 0) < 0 else "中性")
+    core_side = 1 if (ov or 0) > 0 else (-1 if (ov or 0) < 0 else 0)
     decisive = sw.get("stance", "保守") == "重押"
+
+    # risk-off 下檔保護 veto（會翻方向）：記憶體族群輪出時、外資重抽離則否決「跟 SOX 做多」翻偏空。
+    # 與部位軸(轉空風險指數)互補——部位軸只縮量、此 veto 直接改方向。
+    ro = risk_off.assess()
+    adj_side, veto_note = risk_off.apply_to_side(core_side, ro if not ro.get("error") else {})
+    veto_on = adj_side != core_side
+    side = "偏多" if adj_side > 0 else ("偏空" if adj_side < 0 else "中性")
 
     # 部位/風險軸（獨立於方向）：轉空風險指數決定部位大小；重押僅在風險安全時允許
     risk = reversal_risk.assess()
@@ -118,7 +129,10 @@ def generate(date_str: str | None = None) -> str:
         "",
         "## ⚡ 一行決策（方向 × 部位風險 兩軸）",
         (f"- 方向【{side}】{'高信心(決斷夜)' if decisive else '低信心(平淡夜)'}"
-         f" ─ 昨晚{dname} {ov:+.2f}%（{sw.get('overnight_bucket')}/{sw.get('conviction')}夜）"),
+         f" ─ 昨晚{dname} {ov:+.2f}%（{sw.get('overnight_bucket')}/{sw.get('conviction')}夜）"
+         + (f"　⚠ **下檔保護 veto 觸發**：跟{dname}原為偏多，但外資近{ro.get('k')}日抽離"
+            f" {ro.get('foreign_sum_k')}張（{_REGIME_ZH.get(ro.get('regime'), ro.get('regime'))}）→ **翻偏空**"
+            if veto_on else "")),
         (f"- 部位【{position}】 ← 轉空風險 **{rlevel}**{risk_detail}{div_note}"),
         (f"預期同日勝率：決斷夜全日 {dw.get('全日方向',{}).get('win',0):.0%}／開盤 {dw.get('開盤方向',{}).get('win',0):.0%}"
          + ("　但轉空風險已升高、以部位軸為準、勿重押" if rlevel in ("偏高", "極度危險") else "")
@@ -128,9 +142,14 @@ def generate(date_str: str | None = None) -> str:
         "## 風險儀表板",
         f"- 部位：**{position}**　方向：**{side}**　轉空風險：**{rlevel}**{rpct}"
         f"　波動(10日)：{sw.get('current_vol_10d')}",
-        f"- 早盤被殺機率(open_down)：≥2% {pr(2.0,'open_down') or 0:.0%}　≥3% {pr(3.0,'open_down') or 0:.0%}　≥5% {pr(5.0,'open_down') or 0:.0%}",
-        f"- 開高機率(open_up)：≥2% {pr(2.0,'open_up') or 0:.0%}　全日收黑：≥2% {pr(2.0,'day_down') or 0:.0%}",
-        f"- 平均開盤跳空 {tp.get('avg_open_gap')}%　平均全日 {tp.get('avg_day_move')}%",
+        (f"- 下檔保護 veto：{'🔴 觸發（翻偏空）' if veto_on else '🟢 未觸發'}"
+         f"　外資近{ro.get('k')}日 {ro.get('foreign_sum_k')}張（門檻 {ro.get('veto_lots')}）"
+         f"　族群輪動診斷：{_REGIME_ZH.get(ro.get('regime'), '—')}"
+         + (f"（記憶體vs全市場 {ro.get('context',{}).get('mem_rel_strength')}pp）"
+            if ro.get("context", {}).get("mem_rel_strength") is not None else "")
+         if not ro.get("error") else f"- 下檔保護 veto：無資料（{ro.get('error')}）"),
+        f"- 盤中波動：平均全日振幅參考波動(10日) {sw.get('current_vol_10d')}"
+        f"（此股盤中振幅大但**開盤後方向≈50%不可預測**，不提供盤中方向/差價訊號，僅示抱單風險）",
         "",
         "## 策略依據",
         f"- 該股類型：{stype}　隔夜驅動：{cs.get('overnight_driver', drv)}（{dname}）",
