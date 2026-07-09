@@ -2,7 +2,8 @@
 chcp 65001 >nul
 set PYTHONUTF8=1
 setlocal
-cd /d "%~dp0"
+REM 進階工具位於 advanced\，切回專案根目錄執行
+cd /d "%~dp0.."
 
 set "PY=.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
@@ -14,7 +15,7 @@ if "%ARGS%"=="" set ARGS=--start 2025-07-01
 echo ====================================================
 echo  Refresh history + recompute 6-factor weights using CURRENT calibrated params
 echo  = TUNING.md Step A (backtest part) + Step B (news) + Step C (OOS honesty)
-echo  To RE-TUNE the scoring params instead, run calibrate.bat.
+echo  To RE-TUNE the scoring params instead, run advanced\calibrate.bat.
 echo ====================================================
 echo.
 echo Note: chip backfill calls TWSE day by day; may take several minutes.

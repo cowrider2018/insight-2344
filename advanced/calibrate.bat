@@ -2,7 +2,8 @@
 chcp 65001 >nul
 set PYTHONUTF8=1
 setlocal
-cd /d "%~dp0"
+REM 進階工具位於 advanced\，切回專案根目錄執行
+cd /d "%~dp0.."
 
 set "PY=.venv\Scripts\python.exe"
 if not exist "%PY%" set "PY=python"
@@ -18,7 +19,7 @@ echo  C) out-of-sample honesty check (no look-ahead / no overfit)
 echo ====================================================
 echo.
 echo Using args: %ARGS%
-echo (override e.g. calibrate.bat --start 2025-07-01 --end 2026-06-23 --rounds 2)
+echo (override e.g. advanced\calibrate.bat --start 2025-07-01 --end 2026-06-23 --rounds 2)
 echo.
 
 echo [0/2] Build branch walk-forward behavioral model (per-broker weighted edge) -^> branch_wf table + data\branch_profiles.json

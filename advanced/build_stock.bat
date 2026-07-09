@@ -1,11 +1,12 @@
 @echo off
 chcp 65001 >nul
 set PYTHONUTF8=1
-cd /d "%~dp0"
+REM 進階工具位於 advanced\，切回專案根目錄執行
+cd /d "%~dp0.."
 
 if "%~1"=="" (
-  echo Usage: build_stock.bat ^<symbol^> [name]
-  echo   e.g. build_stock.bat 2330 台積電
+  echo Usage: advanced\build_stock.bat ^<symbol^> [name]
+  echo   e.g. advanced\build_stock.bat 2330 台積電
   exit /b 1
 )
 set STOCK_SYMBOL=%~1
