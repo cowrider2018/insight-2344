@@ -13,6 +13,7 @@ import fetch_taifex
 import fetch_tdcc
 import fetch_twse
 import fetch_us
+import risk_off
 import scrape_cmoney
 import swing_risk
 
@@ -133,6 +134,27 @@ def build() -> dict:
 def main():
     dataset = build()
     out = config.data_path()
+
+    # 先攝取至時間軸 DB（消息/籌碼/營收/K 線），供回測查詢、節省日後重抓成本。
+    # 須在 risk_off 之前：risk_off 讀 DB 的最新籌碼，攝取後才含今日抓到的 D-1 資料（無 1 日落後）。
+    try:
+        import ingest
+        import timeline_db
+        timeline_db.init_db()
+        st = ingest.ingest_dataset(dataset)
+        print(f"  timeline_db: news+{st['news']} chips+{st['chips']} "
+              f"revenue+{st['revenue']} candles+{st['candles']} us+{st.get('us', 0)} "
+              f"intraday+{st.get('intraday', 0)} branch+{st.get('branch', 0)} "
+              f"holders+{st.get('holders', 0)} futures+{st.get('futures', 0)}")
+    except Exception as e:  # noqa: BLE001
+        print(f"  timeline_db 攝取略過: {e}")
+
+    # risk-off 下檔保護（方向軸修正）：記憶體族群輪動偵測 + 外資抽離 veto（攝取後、資料最新）
+    try:
+        dataset["risk_off"] = risk_off.assess()
+    except Exception as e:  # noqa: BLE001
+        dataset["risk_off"] = {"error": str(e)}
+
     out.write_text(json.dumps(dataset, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     s = dataset["source_status"]
     print(f"[build_dataset] 寫入 {out}")
@@ -158,23 +180,21 @@ def main():
               f"  開盤殺>=2% {tp[2.0]['open_down']:.0%}  全日收黑>=2% {tp[2.0]['day_down']:.0%}"
               f"  開高>=2% {tp[2.0]['open_up']:.0%}")
         print(f"  部位旗標: 【{sw.get('stance')}】 {sw.get('stance_reason')}")
+
+    ro = dataset.get("risk_off") or {}
+    if ro and not ro.get("error"):
+        ctx = ro.get("context") or {}
+        print(f"  risk-off veto: 外資近{ro.get('k')}日 {ro.get('foreign_sum_k')}張 -> "
+              f"{'【觸發:翻偏空】' if ro.get('veto_long') else '不觸發'}"
+              f"  regime={ro.get('regime')}（記憶體vs全市場 {ctx.get('mem_rel_strength')}pp・"
+              f"族群外資 {ctx.get('basket_foreign')}張）")
+    elif ro.get("error"):
+        print(f"  risk-off veto: 略過（{ro['error']}）")
+
     if s["warnings"]:
         print("  warnings:")
         for w in s["warnings"]:
             print("   -", w)
-
-    # 累積至時間軸 DB（消息/籌碼/營收/K 線），供回測查詢、節省日後重抓成本
-    try:
-        import ingest
-        import timeline_db
-        timeline_db.init_db()
-        st = ingest.ingest_dataset(dataset)
-        print(f"  timeline_db: news+{st['news']} chips+{st['chips']} "
-              f"revenue+{st['revenue']} candles+{st['candles']} us+{st.get('us', 0)} "
-              f"intraday+{st.get('intraday', 0)} branch+{st.get('branch', 0)} "
-              f"holders+{st.get('holders', 0)} futures+{st.get('futures', 0)}")
-    except Exception as e:  # noqa: BLE001
-        print(f"  timeline_db 攝取略過: {e}")
     return out
 
 
