@@ -129,6 +129,6 @@
 4. **D（橫斷面）** — 最大潛力但需重新定義產品，獨立評估。
 
 ## 共用注意
-- 每個新面務必：`*_asof(date<D)` 無 look-ahead（加 assert）；冷啟動覆蓋率低時護欄自動權重 0；回補後跑 `calibrate.bat` 重校；以 `oos_check.py` 為誠實裁決（OOS≥in-sample 才可信）。
+- 每個新面務必：`*_asof(date<D)` 無 look-ahead（加 assert）；冷啟動覆蓋率低時護欄自動權重 0；回補後跑 `advanced\calibrate.bat` 重校；以 `oos_check.py` 為誠實裁決（OOS≥in-sample 才可信）。
 - 鐵則不變：命中率第一優先、天花板 ~55–62%、>80% 視為 bug、命中率≠報酬率。
 - 參考檔：`src/branch_model.py`（walk-forward+收縮 模板）、`src/fetch_dj_chips.py`（爬取+解析 模板）、`TUNING.md`（調適流程與鐵則）。

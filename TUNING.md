@@ -134,9 +134,9 @@ python src\oos_check.py --start 2025-07-01 --end 2026-06-23
 ---
 
 ## 7. 一鍵對應（雙擊 .bat）
-- `setup.bat`：建環境 + DB 初始化 + 回補 json/candles/us
-- `backfill_history.bat`：回補歷史籌碼 → 回測 → 驗證消息型態（= 步驟 A 的回測部分 + 步驟 B）
-- `calibrate.bat`：校準參數 + 重算平衡權重（= 步驟 A）
+- `setup.bat`：一條龍建置 = 建環境 + DB 初始化 + 回補 json/candles/us/intraday/branches + 回補歷史籌碼 + 回測產生 weights + 驗證消息型態（＝步驟 A 回測部分 + 步驟 B，跑完即可上線）
+- `advanced\backfill_history.bat`：以當前參數刷新——回補歷史籌碼 → 回測 → 驗證消息型態（= 步驟 A 的回測部分 + 步驟 B）
+- `advanced\calibrate.bat`：重新校準參數 + 重算平衡權重（= 步驟 A）
 - `run_once.bat` / `schedule_create.bat` / `schedule_delete.bat`：每日流程的立即執行 / 建立 / 刪除排程
 
 ---
