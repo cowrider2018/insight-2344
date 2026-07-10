@@ -46,7 +46,8 @@
 | 24 | EXP-024 | 決斷夜籌碼推理overlay（2D交互）：SOX磁點強度(弱/強)×籌碼訊號強度(弱/強)網格掃描，找是否有特定象限SOX命中率顯著跌破50% | already-local（daily_decision 決斷夜子集） | REJECT |
 | 25 | EXP-025 | 決斷夜籌碼推理overlay（5日滾動趨勢）：籌碼三面5日滾動平均（機構週度部位累積，僅用<D歷史）與SOX衝突時是否有覆蓋力 | already-local（daily_decision 決斷夜子集） | REJECT |
 | 26 | EXP-026 | 平淡夜MU救援：SOX平淡(|SOX|<1%)但美光大動(|MU|>=門檻)＝記憶體株特異隔夜訊號，跟MU方向可救平淡夜勝率(56.9%→?)；與已否決十面綜合救援不同（單驅動條件化） | already-local（us_market mu 2y＋xs.db） | REJECT |
-| 27 | EXP-027 | 平淡夜死區TSM救援：SOX平且MU平(|SOX|<1,|MU|<3)的真死區內，台積電ADR大動(|TSM|>=門檻)＝台股特異通道訊號，跟TSM方向 | already-local（us_market tsm 2y＋xs.db） | RUNNING |
+| 27 | EXP-027 | 平淡夜死區TSM救援：SOX平且MU平(|SOX|<1,|MU|<3)的真死區內，台積電ADR大動(|TSM|>=門檻)＝台股特異通道訊號，跟TSM方向 | already-local（us_market tsm 2y＋xs.db） | REJECT |
+| 28 | EXP-028 | 平淡夜死區SOX累積漂移：死區內近3日SOX累積(每晚都<1%但合計|>=1.5%)＝慢速趨勢未被單夜規則捕捉，跟累積方向 | already-local（us_market sox/soxx 2y＋xs.db） | RUNNING |
 
 ## 已完成
 
@@ -77,6 +78,7 @@
 | EXP-024 | REJECT | 2x2網格四象限僅強SOX×弱籌碼顯著(83.33%,p=0.008，反而支持跟SOX)；唯一<50%象限p=0.815無顯著性 | [EXP-024](docs/experiments/EXP-024-2d-grid-decisive.md) |
 | EXP-025 | REJECT | 5日滾動趨勢版仍鏡像互補(−12.1~−16.4pp)；連續第10輪REJECT，達使用者停止條件 | [EXP-025](docs/experiments/EXP-025-5d-trend-decisive.md) |
 | EXP-026 | REJECT | 訊號真實(\|MU\|≥3%平淡夜75.86%,p=0.008,非SOX影子)但與composite冗餘：22天中19天已同向，僅3天改向，全日+0.47pp<+1pp門檻 | [EXP-026](docs/experiments/EXP-026-flat-mu-rescue.md) |
+| EXP-027 | REJECT | 死區(n=97)內TSM全門檻擲幣(48-57%,p≥0.62)且分年方向翻轉；TSM個股題材傳導不到利基型記憶體 | [EXP-027](docs/experiments/EXP-027-deadzone-tsm-rescue.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
