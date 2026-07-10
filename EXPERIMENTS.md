@@ -32,6 +32,7 @@
 | 10 | EXP-010 | 決斷夜且預期跳空極大時「開盤吃掉行情」→ 全日收盤方向 edge 衰減？（只測收盤方向條件化，嚴禁重測盤中差價） | already-local | REJECT |
 | 11 | EXP-011 | DRAM 現貨價趨勢＝華邦基本面驅動（免費源需先驗證；大概率 BLOCKED-DATA） | hard | BLOCKED-DATA |
 | 12 | EXP-012 | 06:00 前美期貨（NQ=F）漂移補充隔夜訊號（無歷史 06:00 快照可回補 → 需前瞻蒐集 ≥3 個月） | hard | DEFERRED |
+| 13 | EXP-013 | SK海力士美股上市前元大／大摩調度資金大賣 2344 → 次日偏空領先訊號 | already-local（broker_branches） | REJECT |
 
 ## 已完成
 
@@ -48,6 +49,7 @@
 | EXP-009 | BLOCKED-DATA | Yahoo quoteSummary 401（需 crumb）；且 8 次財報反應日 \|漲跌\| 3.21%≈基準 3.13% 無放大 | [EXP-009](docs/experiments/EXP-009-mu-earnings.md) |
 | EXP-010 | REJECT | 假設反向：\|SOX\|≥3% 跟-SOX 更可靠（兩年一致 +7.7pp）；2–3% 箱 −8.2pp 但 p=0.197 不過 | [EXP-010](docs/experiments/EXP-010-gap-conditioning.md) |
 | EXP-011 | BLOCKED-DATA | 免費靜態頁無現貨價（JS/付費牆）；無免費歷史 API，回測不可能 | [EXP-011](docs/experiments/EXP-011-dram-spot.md) |
+| EXP-013 | REJECT | 大摩台分點近期賣超日 72%(p=0.017) 真實但元大僅 40% 不同步；機制＝branch_wf 已測、權重0；催化劑n=1無法通過關卡② | [EXP-013](docs/experiments/EXP-013-ipo-capital-flow.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
