@@ -43,6 +43,7 @@
 | 21 | EXP-021 | 決斷夜籌碼推理overlay（流量變化）：籌碼三面分數日變化(D-1 vs D-2 delta，趨勢/加速度)而非單日水位，作為衝突判斷來源 | already-local（daily_decision 決斷夜子集） | REJECT |
 | 22 | EXP-022 | 決斷夜籌碼推理overlay（chips內部子成分）：拆三大法人淨額(inst)與融資變化(margin)兩子成分，個別測是否有獨立覆蓋力 | already-local（daily_decision 決斷夜子集） | REJECT |
 | 23 | EXP-023 | 決斷夜籌碼推理overlay（嚴格一致）：三面須全部有資料且方向完全一致才算籌碼共識（排除多數決2:1弱樣本），測是否較穩健 | already-local（daily_decision 決斷夜子集） | REJECT |
+| 24 | EXP-024 | 決斷夜籌碼推理overlay（2D交互）：SOX磁點強度(弱/強)×籌碼訊號強度(弱/強)網格掃描，找是否有特定象限SOX命中率顯著跌破50% | already-local（daily_decision 決斷夜子集） | REJECT |
 
 ## 已完成
 
@@ -70,6 +71,7 @@
 | EXP-021 | REJECT | 趨勢版更劣(−6.4~−18.6pp)；meta發現：二元覆蓋框架下SOX衝突子集命中率從未穩健跌破50%，結構性難成立 | [EXP-021](docs/experiments/EXP-021-chips-delta-decisive.md) |
 | EXP-022 | REJECT | inst/margin子成分皆劣化；margin最差(−26.4pp)，衝突日跟SOX反而72.29%＞基準；七輪窮盡拆解一致REJECT | [EXP-022](docs/experiments/EXP-022-chips-subparts-decisive.md) |
 | EXP-023 | REJECT | 嚴格一致下衝突日SOX首次跌破50%(47.06%)，覆蓋後+1.4pp但p=0.864無顯著性，屬多重比較巧合 | [EXP-023](docs/experiments/EXP-023-unanimous-chips-decisive.md) |
+| EXP-024 | REJECT | 2x2網格四象限僅強SOX×弱籌碼顯著(83.33%,p=0.008，反而支持跟SOX)；唯一<50%象限p=0.815無顯著性 | [EXP-024](docs/experiments/EXP-024-2d-grid-decisive.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
