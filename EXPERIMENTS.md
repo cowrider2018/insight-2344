@@ -21,7 +21,7 @@
 | Rank | EXP | 假設（一句） | 資料 | 狀態 |
 |---|---|---|---|---|
 | 1 | EXP-001 | 韓國記憶體同業籃（海力士 000660.KS＋三星 005930.KS 相對 ^KS11 的 D-1 強弱）＝記憶體族群專屬資金流，領先 2344 次日方向（正對 2026-06 海力士 IPO 輪動教訓；韓股 14:30 TST 收盤，06:00 已知） | free-fetch（重用 `fetch_us.fetch_yahoo_daily`） | REJECT |
-| 2 | EXP-002 | 台股大盤 breadth（xs.db 前 300 檔上漲家數比 D-1／近 3 日）惡化 → 2344 次日弱勢（補 risk_off 的 market_ret） | already-local（xs.db 2 年） | pending |
+| 2 | EXP-002 | 台股大盤 breadth（xs.db 前 300 檔上漲家數比 D-1／近 3 日）惡化 → 2344 次日弱勢（補 risk_off 的 market_ret） | already-local（xs.db 2 年） | REJECT |
 | 3 | EXP-003 | USDTWD 台幣急貶（D-1 與 5 日趨勢）＝外資撤出前兆 → 偏空 regime | free-fetch（Yahoo TWD=X） | pending |
 | 4 | EXP-004 | 量能 regime 濾鏡：爆量/縮量日（vol vs vol_ma5 分層）改變既有訊號可靠度 → confidence/overlay，不動方向軸 | already-local（candles 240d） | pending |
 | 5 | EXP-005 | 融資餘額 5 日急增至極端（散戶槓桿追高）＝反指標 | already-local（chips 表 MI_MARGN） | pending |
@@ -38,6 +38,7 @@
 | EXP | 判定 | 關鍵數字 | 紀錄 |
 |---|---|---|---|
 | EXP-001 | REJECT | rel_1d 全窗 58.4%(p=0.018) 但平淡夜 52.1%＝SOX 影子；rel_3d OOS −3.6pp；overlay 方向反轉（+9.1pp） | [EXP-001](docs/experiments/EXP-001-kr-memory-basket.md) |
+| EXP-002 | REJECT | b1/b3 p≥0.14 無增量；overlay b3≤0.35 近一年 −25pp(n=8) 但早一年 +1pp＝regime 假象 | [EXP-002](docs/experiments/EXP-002-market-breadth.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
