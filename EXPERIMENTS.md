@@ -28,7 +28,7 @@
 | 6 | EXP-006 | 波動 regime（^VIX＋SOX realized vol）高波動下「決斷夜跟隔夜」勝率衰減 → 部位調整 overlay | free-fetch＋local | REJECT |
 | 7 | EXP-007 | 週期效應：day-of-week（n≈48 可驗）／月底月初（n≈12 只觀察）／營收公布週 系統性偏差 | already-local | REJECT |
 | 8 | EXP-008 | 連漲/連跌 ≥3 日後反轉機率偏高（關卡④重點對象：streak 常為 SOX run 影子） | already-local | REJECT |
-| 9 | EXP-009 | MU 財報行事曆事件標註（每年 ~4 事件、n 太小 → 僅走「報告改善」路徑，質性風險提示） | free-fetch（公開財報日） | pending |
+| 9 | EXP-009 | MU 財報行事曆事件標註（每年 ~4 事件、n 太小 → 僅走「報告改善」路徑，質性風險提示） | free-fetch（公開財報日） | BLOCKED-DATA |
 | 10 | EXP-010 | 決斷夜且預期跳空極大時「開盤吃掉行情」→ 全日收盤方向 edge 衰減？（只測收盤方向條件化，嚴禁重測盤中差價） | already-local | pending |
 | 11 | EXP-011 | DRAM 現貨價趨勢＝華邦基本面驅動（免費源需先驗證；大概率 BLOCKED-DATA） | hard | pending |
 | 12 | EXP-012 | 06:00 前美期貨（NQ=F）漂移補充隔夜訊號（無歷史 06:00 快照可回補 → 需前瞻蒐集 ≥3 個月） | hard | DEFERRED |
@@ -45,6 +45,7 @@
 | EXP-006 | REJECT | 波動分箱合併 |Δ|≤3.6pp、p≥0.55、單年翻轉；附帶驗證跟-SOX 對波動全域穩健 | [EXP-006](docs/experiments/EXP-006-vol-regime.md) |
 | EXP-007 | REJECT | 週一效應兩年各 p<0.05 但方向相反＝假陽性示範；月底月初 p=0.22 不過 | [EXP-007](docs/experiments/EXP-007-calendar.md) |
 | EXP-008 | REJECT | 反轉六格全負（合併 −6.3/−4.6pp）＝輕微續勢；同日子跟-SOX 75% 支配 | [EXP-008](docs/experiments/EXP-008-streak-reversal.md) |
+| EXP-009 | BLOCKED-DATA | Yahoo quoteSummary 401（需 crumb）；且 8 次財報反應日 \|漲跌\| 3.21%≈基準 3.13% 無放大 | [EXP-009](docs/experiments/EXP-009-mu-earnings.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
