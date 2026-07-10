@@ -26,7 +26,7 @@
 | 4 | EXP-004 | 量能 regime 濾鏡：爆量/縮量日（vol vs vol_ma5 分層）改變既有訊號可靠度 → confidence/overlay，不動方向軸 | already-local（candles 240d） | REJECT |
 | 5 | EXP-005 | 融資餘額 5 日急增至極端（散戶槓桿追高）＝反指標 | already-local（chips 表 MI_MARGN） | REJECT |
 | 6 | EXP-006 | 波動 regime（^VIX＋SOX realized vol）高波動下「決斷夜跟隔夜」勝率衰減 → 部位調整 overlay | free-fetch＋local | REJECT |
-| 7 | EXP-007 | 週期效應：day-of-week（n≈48 可驗）／月底月初（n≈12 只觀察）／營收公布週 系統性偏差 | already-local | pending |
+| 7 | EXP-007 | 週期效應：day-of-week（n≈48 可驗）／月底月初（n≈12 只觀察）／營收公布週 系統性偏差 | already-local | REJECT |
 | 8 | EXP-008 | 連漲/連跌 ≥3 日後反轉機率偏高（關卡④重點對象：streak 常為 SOX run 影子） | already-local | pending |
 | 9 | EXP-009 | MU 財報行事曆事件標註（每年 ~4 事件、n 太小 → 僅走「報告改善」路徑，質性風險提示） | free-fetch（公開財報日） | pending |
 | 10 | EXP-010 | 決斷夜且預期跳空極大時「開盤吃掉行情」→ 全日收盤方向 edge 衰減？（只測收盤方向條件化，嚴禁重測盤中差價） | already-local | pending |
@@ -43,6 +43,7 @@
 | EXP-004 | REJECT | 量能分層 Δ≤4.1pp、p≥0.53；爆量效果跨年符號翻轉；不改變跟-SOX 可靠度 | [EXP-004](docs/experiments/EXP-004-volume-regime.md) |
 | EXP-005 | REJECT | sign(−m5) 49.0% 擲幣；極端箱 p≥0.36；m5≥+8% 反而偏漲（−8pp 反向） | [EXP-005](docs/experiments/EXP-005-margin-extreme.md) |
 | EXP-006 | REJECT | 波動分箱合併 |Δ|≤3.6pp、p≥0.55、單年翻轉；附帶驗證跟-SOX 對波動全域穩健 | [EXP-006](docs/experiments/EXP-006-vol-regime.md) |
+| EXP-007 | REJECT | 週一效應兩年各 p<0.05 但方向相反＝假陽性示範；月底月初 p=0.22 不過 | [EXP-007](docs/experiments/EXP-007-calendar.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
