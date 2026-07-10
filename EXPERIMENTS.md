@@ -33,6 +33,7 @@
 | 11 | EXP-011 | DRAM 現貨價趨勢＝華邦基本面驅動（免費源需先驗證；大概率 BLOCKED-DATA） | hard | BLOCKED-DATA |
 | 12 | EXP-012 | 06:00 前美期貨（NQ=F）漂移補充隔夜訊號（無歷史 06:00 快照可回補 → 需前瞻蒐集 ≥3 個月） | hard | DEFERRED |
 | 13 | EXP-013 | SK海力士美股上市前元大／大摩調度資金大賣 2344 → 次日偏空領先訊號 | already-local（broker_branches） | REJECT |
+| 14 | EXP-014 | 月營收趨勢＋記憶體現貨/合約價＋產業飽和度競爭（中國記憶體、韓廠擴產）綜合推算「隱含目標價」，與法人目標價比對驗證算法可信度，再作整體行情判斷 overlay | free-fetch（多來源） | BLOCKED-DATA |
 
 ## 已完成
 
@@ -50,6 +51,7 @@
 | EXP-010 | REJECT | 假設反向：\|SOX\|≥3% 跟-SOX 更可靠（兩年一致 +7.7pp）；2–3% 箱 −8.2pp 但 p=0.197 不過 | [EXP-010](docs/experiments/EXP-010-gap-conditioning.md) |
 | EXP-011 | BLOCKED-DATA | 免費靜態頁無現貨價（JS/付費牆）；無免費歷史 API，回測不可能 | [EXP-011](docs/experiments/EXP-011-dram-spot.md) |
 | EXP-013 | REJECT | 大摩台分點近期賣超日 72%(p=0.017) 真實但元大僅 40% 不同步；機制＝branch_wf 已測、權重0；催化劑n=1無法通過關卡② | [EXP-013](docs/experiments/EXP-013-ipo-capital-flow.md) |
+| EXP-014 | BLOCKED-DATA | 記憶體現貨價(沿用EXP-011)與中韓產能飽和度皆無免費結構化歷史；法人目標價頁(cnyes)雖可解析但核心驅動腿缺2/4 | [EXP-014](docs/experiments/EXP-014-valuation-target-price.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
