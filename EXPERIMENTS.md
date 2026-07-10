@@ -38,6 +38,7 @@
 | 16 | EXP-016 | 決斷夜籌碼推理overlay：籌碼三面(chips/branch/holders)方向共識與SOX方向衝突日，改以籌碼共識覆蓋跟隔夜規則，可將決斷夜全日命中率由70.7%推升 | already-local（daily_decision 決斷夜子集） | REJECT |
 | 17 | EXP-017 | 決斷夜籌碼推理overlay（單面）：分別測 chips/branch/holders 各自在與SOX衝突日的方向命中率，找出是否有單面優於SOX可局部覆蓋 | already-local（daily_decision 決斷夜子集） | REJECT |
 | 18 | EXP-018 | 決斷夜籌碼推理overlay（弱磁點分層）：|SOX|處於1-2%弱決斷帶時跟SOX命中率較低，此帶內籌碼共識是否具備局部覆蓋優勢（強磁點|SOX|>=2%不動） | already-local（daily_decision 決斷夜子集） | REJECT |
+| 19 | EXP-019 | 決斷夜籌碼推理overlay（高強度門檻）：只在籌碼三面平均訊號強度極高(>=0.5)時才視為有效衝突並覆蓋，過濾雜訊分歧樣本 | already-local（daily_decision 決斷夜子集） | REJECT |
 
 ## 已完成
 
@@ -60,6 +61,7 @@
 | EXP-016 | REJECT | 決斷夜基準70.71%；衝突日改跟籌碼共識僅35.82%(反指標)；覆蓋後全日57.14%(−13.6pp)；同向日76.71%為附帶發現 | [EXP-016](docs/experiments/EXP-016-chips-consensus-decisive.md) |
 | EXP-017 | REJECT | 三面單獨測試一致：衝突日跟SOX 62-65% vs 跟籌碼35-37%（互補鏡像）；確認非多數決手法瑕疵，機制性不成立 | [EXP-017](docs/experiments/EXP-017-single-dim-decisive.md) |
 | EXP-018 | REJECT | 弱磁點(1-2%)68.97% vs 強磁點71.95%差距小；弱磁點衝突日籌碼仍鏡像互補(33.33%)，覆蓋後63.57%(−7.1pp) | [EXP-018](docs/experiments/EXP-018-weak-sox-band-chips.md) |
+| EXP-019 | REJECT | 三門檻掃描非單調(−6.4/+0.7/−2.1pp)；唯一轉正的0.35門檻p=1.000無顯著性，屬多重檢定雜訊 | [EXP-019](docs/experiments/EXP-019-high-conviction-chips.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
