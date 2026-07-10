@@ -35,6 +35,7 @@
 | 13 | EXP-013 | SK海力士美股上市前元大／大摩調度資金大賣 2344 → 次日偏空領先訊號 | already-local（broker_branches） | REJECT |
 | 14 | EXP-014 | 月營收趨勢＋記憶體現貨/合約價＋產業飽和度競爭（中國記憶體、韓廠擴產）綜合推算「隱含目標價」，與法人目標價比對驗證算法可信度，再作整體行情判斷 overlay | free-fetch（多來源） | BLOCKED-DATA |
 | 15 | EXP-015 | 推理流程優化（非新資料）：模型近5個有表態交易日的命中動能（rolling correctness，僅用<D歷史）可預測次日命中率，作為信心/conviction overlay；須獨立於決斷夜SOX規模（非影子） | already-local（backtest 預測序列） | REJECT |
+| 16 | EXP-016 | 決斷夜籌碼推理overlay：籌碼三面(chips/branch/holders)方向共識與SOX方向衝突日，改以籌碼共識覆蓋跟隔夜規則，可將決斷夜全日命中率由70.7%推升 | already-local（daily_decision 決斷夜子集） | REJECT |
 
 ## 已完成
 
@@ -54,6 +55,7 @@
 | EXP-013 | REJECT | 大摩台分點近期賣超日 72%(p=0.017) 真實但元大僅 40% 不同步；機制＝branch_wf 已測、權重0；催化劑n=1無法通過關卡② | [EXP-013](docs/experiments/EXP-013-ipo-capital-flow.md) |
 | EXP-014 | BLOCKED-DATA | 記憶體現貨價(沿用EXP-011)與中韓產能飽和度皆無免費結構化歷史；法人目標價頁(cnyes)雖可解析但核心驅動腿缺2/4 | [EXP-014](docs/experiments/EXP-014-valuation-target-price.md) |
 | EXP-015 | REJECT | hot動能64.71%(p=0.009,+4.1pp)但拆層後決斷夜72.41% vs 平淡夜48.15%(≤53%)＝SOX影子，非獨立推理流程改進 | [EXP-015](docs/experiments/EXP-015-prediction-momentum.md) |
+| EXP-016 | REJECT | 決斷夜基準70.71%；衝突日改跟籌碼共識僅35.82%(反指標)；覆蓋後全日57.14%(−13.6pp)；同向日76.71%為附帶發現 | [EXP-016](docs/experiments/EXP-016-chips-consensus-decisive.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
