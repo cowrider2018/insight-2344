@@ -10,8 +10,8 @@
 | 腿 | 來源 | 結果 |
 |---|---|---|
 | 月營收趨勢 | `timeline_db.revenue`（TWSE OpenAPI） | ✅ already-local；但已是既有 `score_fundamental` 輸入，現行權重護欄已歸 0（基準快照） |
-| 記憶體現貨/合約價（DRAM/NAND） | DRAMeXchange／TrendForce | ❌ 沿用 [EXP-011](EXP-011-dram-spot.md) 結論：JS 渲染＋付費牆，免費靜態頁 0 筆價格樣式，無免費歷史 API |
-| 產業飽和度競爭（中國擴產/韓廠擴廠） | SEMI／TrendForce／DIGITIMES Research 產能報告 | ❌ 僅零星新聞質性報導（WebSearch 確認，如 CXMT 月產能目標、新廠時程），無免費結構化時間序列或 API；發布頻率不規則，不可回測 |
+| 記憶體現貨/合約價（DRAM/NAND） | DRAMeXchange／TrendForce | ❌ 沿用 [EXP-011](EXP-011-dram-spot.md) 結論；追加實測使用者指定之 `datatrack.trendforce.com.tw` DRAM(4694)/NAND(4695) 圖表頁：靜態 HTML 0 筆價格樣式、頁面為 Vue+Plotly 動態渲染，且偵測到 `isCheckLogin` cookie 機制＋登入/註冊連結（會員閘門）；需帳號登入才可能繼續探查，經使用者確認維持 BLOCKED-DATA |
+| 產業飽和度競爭（中國擴產/韓廠擴廠） | SEMI／TrendForce／DIGITIMES Research 產能報告；備選方案「消息面認定＋可信度轉化強度」 | ❌ 結構化數列無免費來源（WebSearch 確認僅零星質性報導，如 CXMT 月產能目標、新廠時程）。備選的新聞質性方案亦查證受阻：本地 `news` 表僅保留 ~2.5 週歷史（169 筆，2026-06-24~07-10），遠低於回測所需 490 個交易日（技術面資料範圍）；且此類重大產能消息年度發生頻率極低、分散不定期，未來即使補齊歷史語料，能通過關卡②（active≥8）樣本數也需長期累積。經使用者確認判 BLOCKED-DATA／DEFERRED |
 | 法人/外資目標價歷史 | 鉅亨網 `foreignrating.aspx?code=2344` | ✅ 探針證實：靜態 HTML `<table>` 可解析，欄位含日期／券商(Factset)／評等升降／財測EPS／目標價／現價，回溯至 2020 年（多年歷史），免金鑰 |
 
 ## 判定與理由
@@ -26,4 +26,4 @@
 
 ## 重啟條件
 
-出現免費且可回補 ≥200 交易日歷史的（1）DRAM/NAND 現貨或合約價來源，**且**（2）中國/韓廠記憶體產能或稼動率結構化時間序列來源時，兩者皆備才重啟；屆時需額外檢查與既有 fundamental／news broker_target_up 維度的訊息重疊度。
+出現免費且可回補 ≥200 交易日歷史的（1）DRAM/NAND 現貨或合約價來源（如使用者持有 TrendForce DataTrack 帳號且確認為免費非付費層級、頁面登入後仍可回補足夠歷史），**且**（2）中國/韓廠記憶體產能或稼動率結構化時間序列來源，**或**（2'）本地 `news` 表歷史語料累積 ≥1 年（供「消息面可信度→強度」質性方案回測驗證），兩者（或 1＋2'）皆備才重啟；屆時需額外檢查與既有 fundamental／news broker_target_up 維度的訊息重疊度。

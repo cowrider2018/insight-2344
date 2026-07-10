@@ -31,6 +31,25 @@ import config  # noqa: E402
 
 TARGET_PRICE_URL = "https://www.cnyes.com/twstock/foreignrating.aspx?code=2344"
 
+# 使用者指定的 TrendForce DataTrack 現貨價圖表（2026-07-11 追加驗證）
+SPOT_PRICE_URLS = [
+    ("DRAM", "https://datatrack.trendforce.com.tw/Chart/content/4694/mainstream-dram-spot-price"),
+    ("NAND", "https://datatrack.trendforce.com.tw/Chart/content/4695/mainstream-nand-flash-wafer-spot-price"),
+]
+
+
+def probe_spot_price_page(name: str, url: str) -> bool:
+    try:
+        r = requests.get(url, headers={"User-Agent": config.USER_AGENT}, timeout=20)
+    except requests.RequestException as e:
+        print(f"[probe] {name} DataTrack: 連線失敗 {type(e).__name__}")
+        return False
+    print(f"[probe] {name} DataTrack: HTTP {r.status_code}  len={len(r.text)}")
+    price_hits = re.findall(r"(DDR[45][^<>{}]{0,60}?\d+\.\d{2,3})", r.text)
+    has_login_gate = "isCheckLogin" in r.text or "navbarloginATag" in r.text
+    print(f"        價格樣式命中 {len(price_hits)} 筆；登入/會員閘門偵測：{has_login_gate}")
+    return bool(price_hits) and not has_login_gate
+
 
 def probe_target_price_page() -> bool:
     try:
@@ -49,8 +68,11 @@ def probe_target_price_page() -> bool:
 
 
 if __name__ == "__main__":
-    print("[結論-已知] 記憶體現貨/合約價：EXP-011 已判 BLOCKED-DATA（JS 渲染＋付費牆，無免費歷史）")
+    spot_ok = [probe_spot_price_page(n, u) for n, u in SPOT_PRICE_URLS]
+    print("[結論] DataTrack 現貨價：" + ("可得" if any(spot_ok) else "靜態頁 0 價格樣式＋偵測到登入/會員閘門 → 與 EXP-011 同型態，仍 BLOCKED"))
+
     print("[結論-已知] 產業飽和度競爭（中國/韓廠擴產）：無已知免費結構化時間序列來源（僅新聞質性事件）")
+
     ok = probe_target_price_page()
     print("\n[結論] 法人目標價頁可靜態解析" if ok else "\n[結論] 法人目標價頁為 JS 渲染 SPA，靜態請求無可解析表格（同 EXP-011 型態）")
     sys.exit(0 if ok else 1)
