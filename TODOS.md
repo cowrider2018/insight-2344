@@ -1,5 +1,7 @@
 # 2344 籌碼面深化 — 待辦計畫
 
+> 新實驗一律走 `/self-explore` 循環，紀錄見根目錄 `EXPERIMENTS.md`（本檔僅保留歷史設計依據與結論）。
+
 ## ✅ 完成狀態（四案皆已實作，2026-06，各自 commit）
 - **A（TDCC 千張大戶，第九面 `holders`）**：`fetch_tdcc` + `tdcc_holders` 表 + `score_holders`，全鏈路串接。
   以**公布日 `avail_date<D`** 比較無 look-ahead。回測：覆蓋 236/240、單面命中率 **~56%（顯著但弱）**，
