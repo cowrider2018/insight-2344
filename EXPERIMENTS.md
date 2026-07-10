@@ -47,7 +47,7 @@
 | 25 | EXP-025 | 決斷夜籌碼推理overlay（5日滾動趨勢）：籌碼三面5日滾動平均（機構週度部位累積，僅用<D歷史）與SOX衝突時是否有覆蓋力 | already-local（daily_decision 決斷夜子集） | REJECT |
 | 26 | EXP-026 | 平淡夜MU救援：SOX平淡(|SOX|<1%)但美光大動(|MU|>=門檻)＝記憶體株特異隔夜訊號，跟MU方向可救平淡夜勝率(56.9%→?)；與已否決十面綜合救援不同（單驅動條件化） | already-local（us_market mu 2y＋xs.db） | REJECT |
 | 27 | EXP-027 | 平淡夜死區TSM救援：SOX平且MU平(|SOX|<1,|MU|<3)的真死區內，台積電ADR大動(|TSM|>=門檻)＝台股特異通道訊號，跟TSM方向 | already-local（us_market tsm 2y＋xs.db） | REJECT |
-| 28 | EXP-028 | 平淡夜死區SOX累積漂移：死區內近3日SOX累積(每晚都<1%但合計|>=1.5%)＝慢速趨勢未被單夜規則捕捉，跟累積方向 | already-local（us_market sox/soxx 2y＋xs.db） | RUNNING |
+| 28 | EXP-028 | 平淡夜死區SOX累積漂移：死區內近3日SOX累積(每晚都<1%但合計|>=1.5%)＝慢速趨勢未被單夜規則捕捉，跟累積方向 | already-local（us_market sox/soxx 2y＋xs.db） | REJECT |
 
 ## 已完成
 
@@ -79,6 +79,7 @@
 | EXP-025 | REJECT | 5日滾動趨勢版仍鏡像互補(−12.1~−16.4pp)；連續第10輪REJECT，達使用者停止條件 | [EXP-025](docs/experiments/EXP-025-5d-trend-decisive.md) |
 | EXP-026 | REJECT | 訊號真實(\|MU\|≥3%平淡夜75.86%,p=0.008,非SOX影子)但與composite冗餘：22天中19天已同向，僅3天改向，全日+0.47pp<+1pp門檻 | [EXP-026](docs/experiments/EXP-026-flat-mu-rescue.md) |
 | EXP-027 | REJECT | 死區(n=97)內TSM全門檻擲幣(48-57%,p≥0.62)且分年方向翻轉；TSM個股題材傳導不到利基型記憶體 | [EXP-027](docs/experiments/EXP-027-deadzone-tsm-rescue.md) |
+| EXP-028 | REJECT | SOX 3日累積漂移全門檻51-54%(p≥0.60)、早一年≤50%；多日緩趨勢已被台股逐日消化，死區無殘餘alpha | [EXP-028](docs/experiments/EXP-028-deadzone-sox-drift.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
@@ -92,4 +93,5 @@
 | 分點行為／法人持續性（5 日累積 57%） | 拆 regime 後平淡夜 49–52% → SOX beta 影子 | 無 |
 | 模型自身近期命中動能（rolling correctness 作 conviction overlay） | hot 64.71% 拆層後平淡夜 48.15%（≤53%）→ SOX beta 影子（EXP-015） | 無 |
 | 決斷夜籌碼面（chips/branch/holders）覆蓋跟SOX規則（任何粒度：聚合/單面/子訊號/子成分/水位/delta/5日趨勢/嚴格一致/2D交互） | 10輪（EXP-016~025）一致：衝突子集 SOX 命中率結構性不會穩健跌破50%，籌碼側必為鏡像互補、無獨立方向資訊 | 無（機制性證據充分，需全新籌碼資料源才可能重啟） |
+| 平淡夜死區（\|SOX\|<1 且 \|MU\|<3，約23%方向性日）隔夜端救援（TSM單夜、SOX多日累積漂移） | EXP-027/028：全門檻擲幣或不顯著、分年翻轉；多日趨勢已被逐日消化 | 無（隔夜端已窮盡；死區若要救只剩非隔夜資訊，但十面綜合救援亦已否決） |
 | 台指期 OI 作為評分維度 | 單面 44% 不顯著，護欄已歸 0 | 無 |
