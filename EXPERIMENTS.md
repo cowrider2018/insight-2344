@@ -41,6 +41,7 @@
 | 19 | EXP-019 | 決斷夜籌碼推理overlay（高強度門檻）：只在籌碼三面平均訊號強度極高(>=0.5)時才視為有效衝突並覆蓋，過濾雜訊分歧樣本 | already-local（daily_decision 決斷夜子集） | REJECT |
 | 20 | EXP-020 | 決斷夜籌碼推理overlay（子訊號級）：分點(net/conc/smart/daytrade/longterm)與大戶(chg1w/chg4w/retail)各子訊號在衝突日是否有獨立覆蓋力（避免面聚合稀釋） | already-local（daily_decision 決斷夜子集） | REJECT |
 | 21 | EXP-021 | 決斷夜籌碼推理overlay（流量變化）：籌碼三面分數日變化(D-1 vs D-2 delta，趨勢/加速度)而非單日水位，作為衝突判斷來源 | already-local（daily_decision 決斷夜子集） | REJECT |
+| 22 | EXP-022 | 決斷夜籌碼推理overlay（chips內部子成分）：拆三大法人淨額(inst)與融資變化(margin)兩子成分，個別測是否有獨立覆蓋力 | already-local（daily_decision 決斷夜子集） | REJECT |
 
 ## 已完成
 
@@ -66,6 +67,7 @@
 | EXP-019 | REJECT | 三門檻掃描非單調(−6.4/+0.7/−2.1pp)；唯一轉正的0.35門檻p=1.000無顯著性，屬多重檢定雜訊 | [EXP-019](docs/experiments/EXP-019-high-conviction-chips.md) |
 | EXP-020 | REJECT | 8個子訊號(分點5+大戶3)全數劣化(−9.3~−23.6pp)，含曾入選FLAT_W的daytrade/chg1w，五種粒度一致確認無獨立資訊 | [EXP-020](docs/experiments/EXP-020-subsignal-decisive.md) |
 | EXP-021 | REJECT | 趨勢版更劣(−6.4~−18.6pp)；meta發現：二元覆蓋框架下SOX衝突子集命中率從未穩健跌破50%，結構性難成立 | [EXP-021](docs/experiments/EXP-021-chips-delta-decisive.md) |
+| EXP-022 | REJECT | inst/margin子成分皆劣化；margin最差(−26.4pp)，衝突日跟SOX反而72.29%＞基準；七輪窮盡拆解一致REJECT | [EXP-022](docs/experiments/EXP-022-chips-subparts-decisive.md) |
 
 ## 已否決、不再重測（移植自 TODOS.md 實測結論；除非「重啟條件」滿足）
 
