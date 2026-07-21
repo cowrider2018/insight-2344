@@ -49,6 +49,11 @@ def report_path(date_str: str | None = None) -> Path:
     return SYMBOL_REPORTS_DIR / f"{SYMBOL}_{date_str or today_str()}.md"
 
 
+def simple_report_path(date_str: str | None = None) -> Path:
+    """白話新手版精簡稿；與 skill 寫出的完整版同層（頂層 reports/）。"""
+    return REPORTS_DIR / f"{SYMBOL}_{date_str or today_str()}_simple.md"
+
+
 # 每股專屬狀態檔（集中管理，模組一律用這些而非自拼路徑）
 def weights_path() -> Path:
     return SYMBOL_DIR / "weights.json"
@@ -94,6 +99,8 @@ GMAIL_TOKEN = ROOT / os.getenv("GMAIL_TOKEN_FILE", "token.json")
 # 只需寄信權限
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 MAIL_TO = os.getenv("MAIL_TO", "").strip()
+# 白話新手版的獨立收件名單（與 MAIL_TO 分開寄）；未設定時退回 MAIL_TO
+MAIL_TO_SIMPLE = os.getenv("MAIL_TO_SIMPLE", "").strip() or MAIL_TO
 
 # 通用 HTTP UA
 USER_AGENT = (

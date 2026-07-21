@@ -52,7 +52,9 @@ advanced\daily_stock.bat 2344        # = STOCK_SYMBOL=2344 python src\build_data
 - **回測 / 權重優化**：`src/scoring.py` + `src/backtest.py` → `data/weights.json`（六面權重 + 中性門檻）
 - **參數校準**：`src/calibrate.py` → `data/score_params.json`；**消息型態驗證**：`src/validate_news.py` → `data/news_patterns.json`
 - **分析（Claude）**：技能 `/cmoney-2344-daily` 讀 JSON + weights → `reports/2344_YYYYMMDD.md`
-- **交付**：`src/send_email.py` 寄報告給 `MAIL_TO`
+  ＋白話新手版 `reports/2344_YYYYMMDD_simple.md`
+- **交付**：`src/send_email.py` 每天寄**兩封獨立的信**——完整版 → `MAIL_TO`；
+  白話版（`--simple`，固定版型、無術語、含各面向多空與權重表）→ `MAIL_TO_SIMPLE`
 - **排程**：`src/run_daily.ps1`（依序跑抓取→分析→寄信）由 Windows 工作排程器於 06:00 觸發
 
 ## 資料來源（十面）
@@ -74,7 +76,8 @@ advanced\daily_stock.bat 2344        # = STOCK_SYMBOL=2344 python src\build_data
 ## 設定 `.env`（複製 `.env.example`）
 ```
 FUGLE_MARKETDATA_API_KEY=<你的富果金鑰>
-MAIL_TO=<你的 Email>
+MAIL_TO=<你的 Email>                  # 完整版報告收件名單
+MAIL_TO_SIMPLE=<白話版 Email>         # 白話新手版收件名單（可多人逗號分隔）；留空則沿用 MAIL_TO
 ```
 寄信採 Gmail API + OAuth：需 `credentials.json`（Google Cloud Console 下載）。`setup.bat` 會開瀏覽器要求登入授權（安排在長時間回測前，趁你在場完成），產生 `token.json`，之後排程即可無頭寄信。
 
@@ -157,7 +160,8 @@ python src\oos_check.py  --start 2025-07-01 --rounds 2  # 樣本外複核
 ```powershell
 python src\build_dataset.py                          # 產生當日標準化 JSON（並自動攝取進 market.db）
 # 在 Claude Code 內：/cmoney-2344-daily             # 讀 JSON + weights -> reports\2344_YYYYMMDD.md
-python src\send_email.py reports\2344_YYYYMMDD.md    # 寄信測試
+python src\send_email.py reports\2344_YYYYMMDD.md            # 完整版寄信測試 -> MAIL_TO
+python src\send_email.py --simple reports\2344_YYYYMMDD_simple.md   # 白話版寄信測試 -> MAIL_TO_SIMPLE
 ```
 或直接跑排程用的包裝腳本（與 `run_once.bat` 完全相同）：
 ```powershell

@@ -76,6 +76,16 @@ try {
     & $py (Join-Path $proj "src\send_email.py") $report 2>&1 | Tee-Object -FilePath $log -Append
     if ($LASTEXITCODE -ne 0) { Log "warn: send_email 失敗 (exit $LASTEXITCODE)，跳過寄信；報告已產生於 $report" }
 
+    # 3b) 白話新手版（獨立收件名單 MAIL_TO_SIMPLE）；同樣非致命，失敗不影響完整版流程
+    Log "Step3b send_email --simple"
+    $simple = Join-Path $proj "reports\2344_${today}_simple.md"
+    if (Test-Path $simple) {
+        & $py (Join-Path $proj "src\send_email.py") "--simple" $simple 2>&1 | Tee-Object -FilePath $log -Append
+        if ($LASTEXITCODE -ne 0) { Log "warn: 白話版寄送失敗 (exit $LASTEXITCODE)" }
+    } else {
+        Log "warn: 找不到白話版精簡稿 $simple，跳過"
+    }
+
     Log "==== 完成 ===="
 }
 catch {
