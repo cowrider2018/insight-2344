@@ -23,6 +23,26 @@ import universe
 import xs_db
 
 
+# 全市場普通股約 1000+ 檔，聚焦池僅約百檔；以此門檻區分「這天是以哪種池灌的」。
+MIN_ALL_MARKET_SYMBOLS = 500
+
+
+def _done_dates(conn, all_market: bool) -> set[str]:
+    """已完整灌過（candles + chips 皆有）的交易日。
+
+    全市場模式下不能只看「這天有沒有資料」：早期若以聚焦池（約百檔）灌過同一天，
+    純日期層級的判定會誤認已完成而永遠跳過，該日的 market 池 z-score/分位便是拿
+    百來檔當「全市場」算、數值無意義。故全市場模式改以「當日檔數」判定是否夠完整。
+    """
+    floor = MIN_ALL_MARKET_SYMBOLS if all_market else 1
+
+    def ok(table: str) -> set[str]:
+        return {r[0] for r in conn.execute(
+            f"SELECT date FROM {table} GROUP BY date HAVING COUNT(*) >= ?", (floor,))}
+
+    return ok("xs_candles") & ok("xs_chips")
+
+
 def _shares_to_lots(s) -> float | None:
     v = fetch_twse._to_int(s)
     return None if v is None else round(v / 1000, 1)
@@ -156,9 +176,12 @@ def backfill(start: str | None = None, end: str | None = None,
 
     tot = {"candles": 0, "chips": 0, "tdcc": 0, "skip": 0}
     with xs_db.connect() as conn:
-        # 已同時有 candles 與 chips 的交易日 -> 跳過（重跑可續抓）
-        done = ({r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_candles")}
-                & {r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_chips")})
+        # 已完整灌過的交易日 -> 跳過（重跑可續抓；全市場模式另檢查檔數是否夠完整）
+        done = _done_dates(conn, want is None)
+        redo = [d for d in sel if d not in done and d in {
+            r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_candles")}]
+        if redo:
+            print(f"  注意：{len(redo)} 個交易日檔數不足全市場水準（{redo[0]}~{redo[-1]}），將重灌")
         for k, d in enumerate(sel, 1):
             if d in done:
                 tot["skip"] += 1
@@ -213,8 +236,7 @@ def backfill_range(start: str, end: str, all_market: bool = True) -> dict:
     days = list(_weekdays(start, end))
     tot = {"candles": 0, "chips": 0, "skip": 0, "holiday": 0}
     with xs_db.connect() as conn:
-        done = ({r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_candles")}
-                & {r[0] for r in conn.execute("SELECT DISTINCT date FROM xs_chips")})
+        done = _done_dates(conn, want is None)
         print(f"[xs-range] {start}~{end} 共 {len(days)} 個平日（逐日抓 TWSE 全市場、跳過非交易日）")
         for k, d in enumerate(days, 1):
             if d in done:
