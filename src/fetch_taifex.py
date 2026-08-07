@@ -25,6 +25,7 @@ MARKET_KEY = "tx"                  # timeline_db futures_oi 的 market 鍵
 _NET_OI_HEADER = "未平倉口數淨額"   # 「多空未平倉口數淨額」（口）
 _NET_OI_IDX_FALLBACK = 13
 _FOREIGN_KW = "外資"               # 身份別「外資及陸資」
+_END_BACKOFF_DAYS = 6              # 結束日無資料時往前退的天數上限（涵蓋連假）
 
 
 def _to_int(s) -> int | None:
@@ -75,16 +76,29 @@ def fetch_range(start: str, end: str, warnings: list[str]) -> list[dict]:
 
 
 def fetch_oi(date: str | None = None, warnings: list[str] | None = None) -> dict | None:
-    """date=None -> 取近 10 日最新一筆（盤前可得的 D-1）；給 YYYY-MM-DD -> 該日。"""
+    """date=None -> 取近 10 日最新一筆（盤前可得的 D-1）；給 YYYY-MM-DD -> 該日。
+
+    TAIFEX 對「結束日尚無資料」的查詢是整段回空（不是截到最後有資料日）。盤前 6:00 執行時
+    今日資料要 15:00 才公布，若把 end 釘在今天會**整段查無**，導致 futures 面長期缺漏。
+    故結束日逐日往前退，直到取得資料為止。
+    """
     import datetime
     warnings = warnings if warnings is not None else []
-    if date is None:
-        today = config.now_tpe().date()
-        start = (today - datetime.timedelta(days=10)).isoformat()
-        rows = fetch_range(start, today.isoformat(), warnings)
+    if date is not None:
+        rows = fetch_range(date, date, warnings)
         return rows[-1] if rows else None
-    rows = fetch_range(date, date, warnings)
-    return rows[-1] if rows else None
+
+    today = config.now_tpe().date()
+    start = (today - datetime.timedelta(days=15)).isoformat()
+    for back in range(0, _END_BACKOFF_DAYS + 1):
+        end = today - datetime.timedelta(days=back)
+        if end.isoformat() < start:
+            break
+        rows = fetch_range(start, end.isoformat(), warnings)
+        if rows:
+            return rows[-1]
+    warnings.append(f"taifex: 近 {_END_BACKOFF_DAYS} 日結束日皆查無資料（{start}~{today}）")
+    return None
 
 
 if __name__ == "__main__":

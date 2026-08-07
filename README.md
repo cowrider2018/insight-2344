@@ -88,14 +88,15 @@ MAIL_TO=<你的 Email>
 
 ## 路徑 A — 一鍵操作（.bat，雙擊即可）
 
-專案根目錄僅四支 .bat，涵蓋日常生命週期；進階/選用工具收於 `advanced\`（見下）。依生命週期順序：
+專案根目錄僅五支 .bat，涵蓋日常生命週期；進階/選用工具收於 `advanced\`（見下）。依生命週期順序：
 
 | 步驟 | 檔案 | 用途 | 等價手動（見路徑 B） |
 |---|---|---|---|
 | 1 | `setup.bat` | **一條龍完整建置**：建立 `.venv` + 安裝套件 + Playwright + 初始化時間軸 DB + 回補消息/K線/美股/日內/分點 + Gmail 授權（開瀏覽器登入一次）+ 回補歷史籌碼 + 回測產生 `data\weights.json` + 消息型態驗證。跑完系統即可上線。 | B-1、B-2 |
 | 2 | `run_once.bat` | **立即執行一次**每日流程（抓資料 → Claude 分析 → 寄信） | B-3 |
-| 3 | `schedule_create.bat` | **建立**每日 06:00 排程 | B-4 |
-| — | `schedule_delete.bat` | **刪除**排程 | B-4 |
+| 3 | `schedule_create.bat` | **建立**每日排程兩支：05:30 盤前補 1 分 K、06:00 分析 | B-4 |
+| — | `schedule_delete.bat` | **刪除**上述兩支排程 | B-4 |
+| — | `backfill.bat` | **補齊資料缺漏**至當日（外資期貨未平倉 / 券商分點 / walk-forward 分點分數 / 1 分 K / xs.db） | B-5 |
 
 > 排程相關 .bat 若提示權限不足，請以系統管理員身分執行。
 
@@ -164,13 +165,70 @@ python src\send_email.py reports\2344_YYYYMMDD.md    # 寄信測試
 powershell -NoProfile -ExecutionPolicy Bypass -File src\run_daily.ps1
 ```
 
-### B-4 每日 06:00 排程（＝ `schedule_create.bat` / `schedule_delete.bat`）
+### B-4 每日排程（＝ `schedule_create.bat` / `schedule_delete.bat`）
+
+兩支排程，前者為後者鋪路：
+
+| 時間 | 工作名稱 | 腳本 | 做什麼 |
+|---|---|---|---|
+| 05:30 | `CMoney_2344_Intraday` | `src\run_intraday.ps1` | 刷新日 K → 補齊 1 分 K（`backfill.py --intraday --days 30`） |
+| 06:00 | `CMoney_2344_Daily` | `src\run_daily.ps1` | 抓資料 → Claude 分析 → 寄信 |
+
 ```powershell
-schtasks /Create /TN "CMoney_2344_Daily" /TR "powershell -NoProfile -ExecutionPolicy Bypass -File C:\Users\johnyou\Desktop\make-money\src\run_daily.ps1" /SC DAILY /ST 06:00 /F
+schtasks /Create /TN "CMoney_2344_Intraday" /TR "powershell -NoProfile -ExecutionPolicy Bypass -File <專案>\src\run_intraday.ps1" /SC DAILY /ST 05:30 /F
+schtasks /Create /TN "CMoney_2344_Daily"    /TR "powershell -NoProfile -ExecutionPolicy Bypass -File <專案>\src\run_daily.ps1"    /SC DAILY /ST 06:00 /F
 schtasks /Run    /TN "CMoney_2344_Daily"      # 立即觸發一次測試（或執行 run_once.bat）
-schtasks /Delete /TN "CMoney_2344_Daily" /F   # 刪除（或執行 schedule_delete.bat）
+schtasks /Delete /TN "CMoney_2344_Daily" /F   # 刪除（或執行 schedule_delete.bat 一次刪兩支）
 ```
-排程需求：`claude` CLI 已安裝並登入（供 `run_daily.ps1` 無頭呼叫）。執行日誌見 `logs/`。
+
+**為什麼 05:30 要先跑一次**：`build_dataset` 本身也會抓當日 1 分 K，但那是單次、失敗即當日
+永久遺失。05:30 這支是「先行 + 保險」——先把前一交易日的盤中資料落地，並把近 30 個交易日
+抓漏的日子一併補回，06:00 分析時第七面必定齊全。它刻意設計成**非致命**：失敗只記 log、
+不寄錯誤信、不擋 06:00 的流程。
+
+> 05:30 的工作必須先刷新日 K 才能運作：前一天 06:00 流程跑完時 D-1 尚未開盤，`candles`
+> 最新只到 D-2；不先刷新就不會知道 D-1 是交易日、也就不會去補 D-1 的 1 分 K。
+
+排程需求：`claude` CLI 已安裝並登入（供 `run_daily.ps1` 無頭呼叫）。兩支共用當日
+`logs\run_YYYYMMDD.log`，時序一目了然。
+
+> `src\*.ps1` 一律存成 **UTF-8 with BOM**。PowerShell 5.1 讀無 BOM 的 .ps1 會以 ANSI(cp950)
+> 解碼，中文註解被打亂後直接 parse error。新增排程腳本時務必比照。
+
+### B-5 補齊資料缺漏（＝ `backfill.bat`）
+每日流程只抓「當下最新」，任一來源當天失敗就會在 DB 留下永久破洞。`src/backfill.py`
+以 2344 日 K 為交易日曆基準比對各表，找出缺漏日並回補到當日。
+
+```powershell
+python src\backfill.py --check          # 只報告缺漏，不抓取
+python src\backfill.py                  # 回補近 60 交易日
+python src\backfill.py --days 120       # 指定回看範圍
+python src\backfill.py --full           # 回補全部歷史（DJ 分點仍受約半年保留期限制）
+python src\backfill.py --full --no-xs   # 略過 xs.db（全市場逐日抓較慢）
+python src\backfill.py --intraday       # 只刷新日 K + 補 1 分 K（＝ 05:30 排程做的事）
+```
+
+各面可回補性：
+
+| 表 | 來源 | 可回補 | 說明 |
+|---|---|---|---|
+| `futures_oi` | TAIFEX | 全部 | CSV 端點可指定任意區間，一次取回整段 |
+| `broker_branches` | 富邦 DJ | 約半年 | 頁面吃 `e`/`f` 日期參數，逐日抓、以回傳日把關 |
+| `branch_wf` | 本地推導 | 全部 | 由 `broker_branches` 重算 walk-forward 分數 |
+| `xs_candles`/`xs_chips` | TWSE | 多年 | `xs_ingest.backfill`，skip-done 冪等 |
+| `candles` / `chips` | Fugle / TWSE | 全部 | 每日抓整年/最新，實務上不留洞（僅偵測回報） |
+| `candles_1min` | Fugle | 大致可 | 逐日可指定歷史日；較舊日期來源自行降頻（見下） |
+| `revenue` | TWSE OpenAPI | **否** | 端點只出最新月，過往月份需另尋來源 |
+
+> **1 分 K 的來源特性**：Fugle 對較舊日期會自行降頻——實測 2025-11 只給 20 分 K、
+> 2026-01 只給 5 分 K，重抓也不會變細。故 `candles_1min` 少數日子根數偏少（32 日 <260 根）
+> 屬來源限制、非抓取失敗，回補只處理「整日沒有」的日子。
+
+**每日流程已內建自我修補**：05:30 的 `run_intraday.ps1` 補 `candles_1min`；06:00 的
+`build_dataset.py` 在攝取後呼叫 `backfill.self_heal()`，自動補上近 25 交易日的
+`futures_oi` / `broker_branches` 破洞並重算 `branch_wf`。
+有意設計成有界（分點單次最多重抓 8 天），不拖慢 06:00 的流程；補不到的舊日子會隨視窗
+自然滾出，不會無止盡重試。尚未到公布時點的當日不列為缺漏（TAIFEX 15:00、DJ 隔日）。
 
 ---
 

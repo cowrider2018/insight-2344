@@ -149,6 +149,19 @@ def main():
     except Exception as e:  # noqa: BLE001
         print(f"  timeline_db 攝取略過: {e}")
 
+    # 自我修補：補上近期因來源當日失敗而留下的破洞（外資期貨未平倉 / 券商分點），
+    # 並重算 walk-forward 分點分數。須在 ingest 之後（今日資料已入庫）、報告產出之前。
+    # 有界執行（近 25 交易日、分點最多 8 次抓取），不影響 6:00 流程時間。
+    try:
+        import backfill
+        import timeline_db as tdb
+        with tdb.connect() as conn:
+            heal = backfill.self_heal(conn, dataset["source_status"]["warnings"])
+        print(f"  self_heal: futures+{heal.get('futures', 0)} branches+{heal.get('branches', 0)} "
+              f"branch_wf={heal.get('branch_wf', 0)}日")
+    except Exception as e:  # noqa: BLE001
+        print(f"  self_heal 略過: {e}")
+
     # risk-off 下檔保護（方向軸修正）：記憶體族群輪動偵測 + 外資抽離 veto（攝取後、資料最新）
     try:
         dataset["risk_off"] = risk_off.assess()
