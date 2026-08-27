@@ -42,6 +42,10 @@ echo [2/4] Backtest with current params -^> data\weights.json + reports\backtest
 if errorlevel 1 goto :err
 
 echo.
+echo [2b/4] Backtest 2nd axis (day range skew) -^> data\weights_skew.json + reports\backtest_skew_*.md
+"%PY%" src\backtest.py %ARGS% --target skew
+
+echo.
 echo [3/4] Validate news pattern polarity -^> data\news_patterns.json
 "%PY%" src\validate_news.py %ARGS%
 
@@ -50,7 +54,7 @@ echo [4/4] Out-of-sample honesty check (expect OOS ^>= baseline ~47%%, not far b
 "%PY%" src\oos_check.py %ARGS%
 
 echo.
-echo Done. data\weights.json (balanced) + data\news_patterns.json updated; see reports\ for diagnostics.
+echo Done. data\weights.json + data\weights_skew.json (balanced) + data\news_patterns.json updated; see reports\ for diagnostics.
 goto :eof
 
 :err

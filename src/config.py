@@ -54,6 +54,11 @@ def weights_path() -> Path:
     return SYMBOL_DIR / "weights.json"
 
 
+def skew_weights_path() -> Path:
+    """第二軸（當日高低點延伸偏向，非收盤方向）權重，由 backtest.py --target skew 產生。"""
+    return SYMBOL_DIR / "weights_skew.json"
+
+
 def score_params_path() -> Path:
     return SYMBOL_DIR / "score_params.json"
 

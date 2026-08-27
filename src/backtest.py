@@ -142,6 +142,10 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
                 coverage[key] += 1
 
         pct = (D["close"] - prev_close) / prev_close * 100
+        # 第二軸：當日高低點延伸偏向（非收盤方向）。上緣延伸 = D["high"]-prev_close，
+        # 下緣延伸 = prev_close-D["low"]；哪邊延伸較多 = 當日偏向。用於「決斷夜/盤中操作」
+        # 參考軸，與收盤方向軸（actual）並列，互為獨立評估目標（見 backtest.py --target skew）。
+        skew_pct = ((D["high"] - prev_close) - (prev_close - D["low"])) / prev_close * 100
         feats.append({
             "date": d_date,
             "technical": technical, "prev_close": prev_close,
@@ -150,6 +154,7 @@ def extract_features(conn, symbol: str, start: str, end: str, tol: float) -> tup
             "branch": branch, "branch_wf": branch_wf, "holders": holders, "futures": futures,
             "change_pct": round(pct, 2),
             "actual": label_from_pct(pct, tol),
+            "actual_skew": label_from_pct(skew_pct, tol),
         })
     return feats, coverage
 
@@ -181,7 +186,8 @@ def score_samples(feats: list[dict], params: dict | None = None) -> list[dict]:
         samples.append({"date": f["date"], "scores": scores, "subsignals": sub,
                         "id_subsignals": id_sub, "branch_subsignals": br_sub,
                         "hd_subsignals": hd_sub,
-                        "change_pct": f["change_pct"], "actual": f["actual"]})
+                        "change_pct": f["change_pct"], "actual": f["actual"],
+                        "actual_skew": f["actual_skew"]})
     return samples
 
 
@@ -536,6 +542,7 @@ def main(argv: list[str]) -> None:
     tol = float(opt("--tol", str(NEUTRAL_TOL)))
     balance_tol = float(opt("--balance-tol", "0.0"))  # 命中率第一優先：預設 0=不為平衡犧牲命中率
     news_floor = float(opt("--news-floor", str(NEWS_FLOOR)))  # 消息面總權重下限（0 可停用）
+    target = opt("--target", "close")   # close=收盤方向軸（預設，原行為）；skew=當日高低點延伸偏向軸
 
     tdb.init_db()
     with tdb.connect() as conn:
@@ -545,8 +552,16 @@ def main(argv: list[str]) -> None:
         print("[backtest] 無樣本：請先 ingest --backfill-candles（與 --backfill-chips）。")
         return
 
+    if target == "skew":
+        # 第二軸：以「當日高低點延伸偏向」取代「收盤方向」作為評估目標；
+        # 不套用消息面必納約束（該政策是收盤方向軸的產品決策，非統計必要），
+        # 但仍走同一套顯著性護欄，避免小樣本雜訊面獲得免費權重。
+        samples = [{**s, "actual": s["actual_skew"]} for s in samples]
+        news_floor = 0.0
+
     results = optimize(samples)
-    results = restrict_news_floor(results, news_floor)  # 約束：只在 news≥floor 的搭配中選（消息面必納）
+    if target != "skew":
+        results = restrict_news_floor(results, news_floor)  # 約束：只在 news≥floor 的搭配中選（消息面必納）
     results, guard = apply_guard(samples, results)   # 顯著性護欄（技術/消息面豁免）
     best = results[0]
     balanced = pick_balanced(results, balance_tol)   # 實際採用：news≥floor 中最高命中、同分取均衡
@@ -555,6 +570,7 @@ def main(argv: list[str]) -> None:
 
     out = {
         "symbol": config.SYMBOL,
+        "target": target,                             # close=收盤方向軸／skew=高低點偏向軸
         "weights": balanced["weights"],              # 採平衡權重
         "neutral_threshold": balanced["tau"],
         "as_of": config.now_tpe().isoformat(),
@@ -565,7 +581,7 @@ def main(argv: list[str]) -> None:
         "window": [start, end],
         "actual_neutral_tol_pct": tol,
         "balance_tol": balance_tol,
-        "news_floor": news_floor,           # 消息面總權重下限（約束選出的方案 news≥此值）
+        "news_floor": news_floor,           # 消息面總權重下限（約束選出的方案 news≥此值；skew 軸不適用=0）
         "raw_best": {"weights": best["weights"], "tau": best["tau"], "win_rate": best["win_rate"]},
         "coverage": coverage,
         "blocked_dims": guard["blocked"],
@@ -581,21 +597,23 @@ def main(argv: list[str]) -> None:
                        "tiers": conf_tiers},
         "score_params_file": str(config.score_params_path()),
     }
-    weights_path = config.weights_path()
+    weights_path = config.skew_weights_path() if target == "skew" else config.weights_path()
     weights_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    report_path = config.SYMBOL_REPORTS_DIR / f"backtest_{start}_{end}.md"
+    report_name = f"backtest_{'skew_' if target == 'skew' else ''}{start}_{end}.md"
+    report_path = config.SYMBOL_REPORTS_DIR / report_name
     write_report(samples, coverage, results, start, end, tol, report_path, balanced,
                  diagnostics, conf_tiers)
 
-    print(f"[backtest] 樣本 {len(samples)} 日")
+    print(f"[backtest] target={target}  樣本 {len(samples)} 日")
     print(f"  純最佳 命中率 {best['win_rate']:.2%}  權重 "
           + "/".join(f"{_DIM_ZH[d]}{best['weights'][d]:.1f}" for d in scoring.DIMENSIONS)
           + f"  tau={best['tau']}")
     print(f"  平衡(採用) 命中率 {balanced['win_rate']:.2%}  權重 "
           + "/".join(f"{_DIM_ZH[d]}{balanced['weights'][d]:.1f}" for d in scoring.DIMENSIONS)
           + f"  tau={balanced['tau']}")
-    print(f"  消息面約束：於 news≥{news_floor} 的權重搭配中選最佳（採用 news={balanced['weights']['news']:.1f}）")
+    if target != "skew":
+        print(f"  消息面約束：於 news≥{news_floor} 的權重搭配中選最佳（採用 news={balanced['weights']['news']:.1f}）")
     print(f"  -> {weights_path}")
     print(f"  -> {report_path}")
 

@@ -22,20 +22,24 @@ echo Using args: %ARGS%
 echo (override e.g. advanced\calibrate.bat --start 2025-07-01 --end 2026-06-23 --rounds 2)
 echo.
 
-echo [0/2] Build branch walk-forward behavioral model (per-broker weighted edge) -^> branch_wf table + data\branch_profiles.json
+echo [0/4] Build branch walk-forward behavioral model (per-broker weighted edge) -^> branch_wf table + data\branch_profiles.json
 "%PY%" src\branch_model.py
 
 echo.
-echo [1/2] Calibrate params -^> data\score_params.json, full grid -^> data\weights.json (balanced+calibrated)
+echo [1/4] Calibrate params -^> data\score_params.json, full grid -^> data\weights.json (balanced+calibrated)
 "%PY%" src\calibrate.py %ARGS%
 if errorlevel 1 goto :err
 
 echo.
-echo [2/2] Out-of-sample check (train-calibrate, test-validate); expect OOS ^>= baseline ~47%%
+echo [2/4] Recompute 2nd axis (day range skew) with newly calibrated score_params -^> data\weights_skew.json
+"%PY%" src\backtest.py %ARGS% --target skew
+
+echo.
+echo [3/4] Out-of-sample check (train-calibrate, test-validate); expect OOS ^>= baseline ~47%%
 "%PY%" src\oos_check.py %ARGS%
 
 echo.
-echo Done. data\score_params.json + data\weights.json updated.
+echo Done. data\score_params.json + data\weights.json + data\weights_skew.json updated.
 echo See reports\backtest_*.md for per-signal direction hit-rate diagnostics.
 goto :eof
 

@@ -14,8 +14,8 @@
 
 | 檔案 | 用途 | 等價手動 |
 |---|---|---|
-| `backfill_history.bat` | 以**當前已校準參數**回補歷史籌碼 → 回測 → 消息驗證 → 樣本外複核，重算 `data\weights.json`、`data\news_patterns.json`。`setup.bat` 已做過一次；此工具用於**日後刷新**。 | README 路徑 B-2 |
-| `calibrate.bat` | **重新校準**評分參數（座標上升）→ `data\score_params.json`，再全網格重算 `data\weights.json` → 樣本外複核。改的是評分參數本身，非只重算權重。 | README 路徑 B-2' |
+| `backfill_history.bat` | 以**當前已校準參數**回補歷史籌碼 → 回測（軸1收盤方向＋軸2高低點偏向）→ 消息驗證 → 樣本外複核，重算 `data\weights.json`、`data\weights_skew.json`、`data\news_patterns.json`。`setup.bat` 已做過一次；此工具用於**日後刷新**。 | README 路徑 B-2 |
+| `calibrate.bat` | **重新校準**評分參數（座標上升）→ `data\score_params.json`，再全網格重算 `data\weights.json`（軸1）與 `data\weights_skew.json`（軸2）→ 樣本外複核。改的是評分參數本身，非只重算權重。 | README 路徑 B-2' |
 | `build_stock.bat <symbol> [name]` | 通用框架 Step 1：對任一上市股跑完整策略建置（回補 → 校準 → 跑方法電池挑最佳）→ `data\<symbol>\strategy.json`。 | 見 README「通用個股策略框架」 |
 | `daily_stock.bat <symbol>` | 通用框架 Step 2：抓當日資料 → 產出決策卡 → `reports\<symbol>\`。 | 見 README「通用個股策略框架」 |
 
